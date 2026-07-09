@@ -20,7 +20,7 @@ from lottie.importers import importers as l_importers
 from lottie.exporters import exporters as l_exporters
 
 from core.models import DMDisabled, DummyMessage, PermissionLevel, getLogger
-from core.ticket_opened_v2 import build_ticket_opened_view
+from core.ticket_opened_v2 import send_ticket_opened
 from core import checks
 from core.utils import (
     is_image_url,
@@ -502,11 +502,8 @@ class Thread:
                             created_at=datetime.now(timezone.utc),
                         )
                 try:
-                    view = build_ticket_opened_view(self.bot, user, log_url, log_count)
-                    msg = await channel.send(
-                        view=view,
-                        allowed_mentions=discord.AllowedMentions(users=True, roles=True, everyone=False),
-                    )
+                    info_embed = self._format_info_embed(user, log_url, log_count, self.bot.main_color)
+                    msg = await channel.send(embed=info_embed)
                     try:
                         await msg.pin()
                     except Exception as e:
@@ -844,12 +841,9 @@ class Thread:
             mention = self.bot.config["mention"]
 
         async def send_genesis_message():
+            info_embed = self._format_info_embed(recipient, log_url, log_count, self.bot.main_color)
             try:
-                view = build_ticket_opened_view(self.bot, recipient, log_url, log_count, mention)
-                msg = await channel.send(
-                    view=view,
-                    allowed_mentions=discord.AllowedMentions(users=True, roles=True, everyone=False),
-                )
+                msg = await channel.send(mention, embed=info_embed)
                 self.bot.loop.create_task(msg.pin())
                 self._genesis_message = msg
                 # Option selection logging (if a thread-creation menu option was chosen prior to creation)
@@ -886,31 +880,13 @@ class Thread:
                     logger.info("Failed to add self-close reaction to initial message: %s", e)
                 return
 
-            thread_creation_response = self.bot.config["thread_creation_response"]
-
-            embed = discord.Embed(
-                color=self.bot.mod_color,
-                description=thread_creation_response,
-                timestamp=channel.created_at,
-            )
-
             recipient_thread_close = self.bot.config.get("recipient_thread_close")
 
-            if recipient_thread_close:
-                footer = self.bot.config["thread_self_closable_creation_footer"]
-            else:
-                footer = self.bot.config["thread_creation_footer"]
-
-            embed.set_footer(
-                text=footer,
-                icon_url=self.bot.get_guild_icon(guild=self.bot.guild, size=128),
-            )
-            embed.title = self.bot.config["thread_creation_title"]
-
             if creator is None or creator == recipient:
-                msg = await recipient.send(embed=embed)
+                await recipient.create_dm()
+                msg = await send_ticket_opened(recipient)
 
-                if recipient_thread_close:
+                if recipient_thread_close and msg is not None:
                     close_emoji = self.bot.config["close_emoji"]
                     close_emoji = await self.bot.convert_emoji(close_emoji)
                     await self.bot.add_reaction(msg, close_emoji)
