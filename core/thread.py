@@ -20,6 +20,7 @@ from lottie.importers import importers as l_importers
 from lottie.exporters import exporters as l_exporters
 
 from core.models import DMDisabled, DummyMessage, PermissionLevel, getLogger
+from core.ticket_opened_v2 import build_ticket_opened_view
 from core import checks
 from core.utils import (
     is_image_url,
@@ -501,8 +502,11 @@ class Thread:
                             created_at=datetime.now(timezone.utc),
                         )
                 try:
-                    info_embed = self._format_info_embed(user, log_url, log_count, self.bot.main_color)
-                    msg = await channel.send(embed=info_embed)
+                    view = build_ticket_opened_view(self.bot, user, log_url, log_count)
+                    msg = await channel.send(
+                        view=view,
+                        allowed_mentions=discord.AllowedMentions(users=True, roles=True, everyone=False),
+                    )
                     try:
                         await msg.pin()
                     except Exception as e:
@@ -840,9 +844,12 @@ class Thread:
             mention = self.bot.config["mention"]
 
         async def send_genesis_message():
-            info_embed = self._format_info_embed(recipient, log_url, log_count, self.bot.main_color)
             try:
-                msg = await channel.send(mention, embed=info_embed)
+                view = build_ticket_opened_view(self.bot, recipient, log_url, log_count, mention)
+                msg = await channel.send(
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions(users=True, roles=True, everyone=False),
+                )
                 self.bot.loop.create_task(msg.pin())
                 self._genesis_message = msg
                 # Option selection logging (if a thread-creation menu option was chosen prior to creation)
