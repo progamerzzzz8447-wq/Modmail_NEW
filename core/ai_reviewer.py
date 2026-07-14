@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import secrets
 import typing
 from urllib.parse import quote
 
@@ -20,6 +21,17 @@ AI_REVIEW_MESSAGE_LIMIT = None
 AI_REPLY_FOOTER = (
     "This reply is AI generated. If you require further assistance, please reply to this message"
 )
+
+
+def generate_ai_message_joint_id() -> int:
+    """Generate the non-zero shared ID used to link AI staff and recipient copies."""
+    return secrets.randbits(63) or 1
+
+
+def describe_ai_error(exc: BaseException) -> str:
+    """Return a concise, audit-safe exception description including the actual message."""
+    message = " ".join(str(exc).split())
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
 
 
 async def claim_ai_autoreply_once(

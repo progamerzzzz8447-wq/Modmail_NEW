@@ -26,6 +26,8 @@ from core.ai_reviewer import (
     ApplicationReviewWindow,
     GeminiAutoReplyReviewer,
     build_ticket_text,
+    describe_ai_error,
+    generate_ai_message_joint_id,
     has_application_trigger,
     has_configured_trigger,
 )
@@ -810,7 +812,7 @@ class Thread:
 
     async def _send_ai_autoreply(self, name: str, response_text: str) -> None:
         """Deliver a configured AI-selected reply and preserve it in the ticket log."""
-        joint_id = secrets.randbits(63) or 1
+        joint_id = generate_ai_message_joint_id()
         embed = discord.Embed(description=response_text, color=self.bot.mod_color)
         embed.set_author(
             name="AI-generated reply",
@@ -1230,7 +1232,14 @@ class Thread:
                     delivery_status = "AI autoreply delivered after a recipient follow-up."
             except Exception as exc:
                 delivery_error = exc
-                delivery_status = f"AI autoreply delivery failed ({type(exc).__name__})."
+                error_detail = describe_ai_error(exc)
+                delivery_status = f"AI autoreply delivery failed ({error_detail})."
+                logger.error(
+                    "AI autoreply delivery failed for selection %r: %s",
+                    selected,
+                    error_detail,
+                    exc_info=True,
+                )
         else:
             delivery_status = fallback_status
 

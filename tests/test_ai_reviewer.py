@@ -9,6 +9,8 @@ from core.ai_reviewer import (
     GeminiAutoReplyReviewer,
     GeminiHelpfulReplyGenerator,
     build_ticket_text,
+    describe_ai_error,
+    generate_ai_message_joint_id,
     has_application_trigger,
     has_configured_trigger,
 )
@@ -51,6 +53,23 @@ def generate_content_output(value):
 
 
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
+    def test_ai_error_description_includes_missing_name(self):
+        error = NameError("name 'example_name' is not defined")
+
+        self.assertEqual(
+            describe_ai_error(error),
+            "NameError: name 'example_name' is not defined",
+        )
+
+    def test_ai_message_joint_ids_are_nonzero_63_bit_integers(self):
+        joint_ids = {generate_ai_message_joint_id() for _ in range(32)}
+
+        self.assertEqual(len(joint_ids), 32)
+        for joint_id in joint_ids:
+            self.assertIsInstance(joint_id, int)
+            self.assertGreater(joint_id, 0)
+            self.assertLess(joint_id, 2**63)
+
     async def test_generates_structured_sarcastic_reply_without_fixed_suffixes(self):
         session = FakeSession(
             FakeResponse(
