@@ -17,7 +17,7 @@ from dateutil import parser
 
 from core import checks
 from core.alias_parser import parse_autoreply_rule_spec, parse_reply_alias
-from core.ai_reviewer import NO_MATCH
+from core.ai_reviewer import GeminiAnnoyReplyGenerator, NO_MATCH
 from core.models import DMDisabled, PermissionLevel, SimilarCategoryConverter, getLogger
 from core.paginator import EmbedPaginatorSession
 from core.thread import Thread
@@ -1722,6 +1722,115 @@ class Modmail(commands.Cog):
         ctx.message.content = msg
         async with safe_typing(ctx):
             await ctx.thread.reply(ctx.message, msg)
+
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.thread_only()
+    async def annoyautoreply(self, ctx):
+        """Generate and send a sarcastic AI response using the complete thread history."""
+        api_key = self.bot.config.get("gemini_api_key", convert=False)
+        if not api_key or self.bot.session is None:
+            raise commands.CommandError("Gemini API credentials are not configured.")
+
+        transcript_blocks = []
+        message_count = 0
+        async for message in ctx.channel.history(limit=None, oldest_first=True):
+            if message.id == ctx.message.id:
+                continue
+
+            parts = []
+            content = (getattr(message, "clean_content", None) or message.content or "").strip()
+            if content:
+                parts.append(content)
+            for embed in message.embeds:
+                embed_parts = []
+                if embed.title:
+                    embed_parts.append(f"Title: {embed.title}")
+                if embed.description:
+                    embed_parts.append(str(embed.description))
+                for field in embed.fields:
+                    embed_parts.append(f"{field.name}: {field.value}")
+                if embed.footer and embed.footer.text:
+                    embed_parts.append(f"Footer: {embed.footer.text}")
+                if embed_parts:
+                    embed_author = getattr(embed.author, "name", None) or "embedded message"
+                    parts.append(f"{embed_author}: " + "\n".join(embed_parts))
+            if message.attachments:
+                parts.append(
+                    "Attachments: "
+                    + ", ".join(attachment.filename for attachment in message.attachments)
+                )
+            if not parts:
+                continue
+
+            timestamp = message.created_at.isoformat()
+            author = getattr(message.author, "display_name", None) or str(message.author)
+            transcript_blocks.append(f"[{timestamp}] {author}\n" + "\n".join(parts))
+            message_count += 1
+
+        transcript = "\n\n---\n\n".join(transcript_blocks)
+        generator = GeminiAnnoyReplyGenerator(
+            self.bot.session,
+            str(api_key),
+            model=str(self.bot.config.get("gemini_model") or "gemini-3.1-flash-lite"),
+            timeout_seconds=30,
+        )
+
+        response = None
+        delivery_error = None
+        async with safe_typing(ctx):
+            response = await generator.generate(transcript)
+            if response is not None:
+                closing = "Can I help with anything else?"
+                maximum_generated_length = 4_000 - len(closing) - 2
+                response = response[:maximum_generated_length].rstrip()
+                response = f"{response}\n\n{closing}"
+                try:
+                    await ctx.thread._send_ai_autoreply("Manual annoy autoreply", response)
+                except Exception as exc:
+                    delivery_error = exc
+
+        if response is None:
+            await ctx.thread._log_ai_check(
+                ctx.message,
+                transcript,
+                outcome=generator.last_outcome,
+                detail=generator.last_detail or "Gemini did not generate a reply.",
+                selected_name="annoyautoreply",
+                delivery_status="No AI reply was sent.",
+            )
+            return await ctx.send(
+                embed=discord.Embed(
+                    color=self.bot.error_color,
+                    description=generator.last_detail or "Gemini could not generate a reply.",
+                )
+            )
+
+        if delivery_error is not None:
+            await ctx.thread._log_ai_check(
+                ctx.message,
+                transcript,
+                outcome="delivery_error",
+                detail=(
+                    f"Gemini generated a reply, but Discord delivery failed "
+                    f"({type(delivery_error).__name__})."
+                ),
+                selected_name="annoyautoreply",
+                response_text=response,
+                delivery_status="Manual sarcastic AI reply delivery failed.",
+            )
+            raise delivery_error
+
+        await ctx.thread._log_ai_check(
+            ctx.message,
+            transcript,
+            outcome=generator.last_outcome,
+            detail=f"Generated from {message_count} thread messages.",
+            selected_name="annoyautoreply",
+            response_text=response,
+            delivery_status="Manual sarcastic AI reply delivered.",
+        )
+        self.bot.dispatch("thread_reply", ctx.thread, True, ctx.message, False, False)
 
     @commands.command(aliases=["formatreply"])
     @checks.has_permissions(PermissionLevel.SUPPORTER)

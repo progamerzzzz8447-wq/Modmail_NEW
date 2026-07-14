@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from core.ai_reviewer import (
     AI_REVIEW_MESSAGE_LIMIT,
     ApplicationReviewWindow,
+    GeminiAnnoyReplyGenerator,
     GeminiAutoReplyReviewer,
     build_ticket_text,
     has_application_trigger,
@@ -49,6 +50,28 @@ def generate_content_output(value):
 
 
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_generates_structured_sarcastic_reply_without_fixed_suffixes(self):
+        session = FakeSession(
+            FakeResponse(
+                200,
+                generate_content_output({"reply": "Oh, what a wonderfully urgent request."}),
+            )
+        )
+        generator = GeminiAnnoyReplyGenerator(session, "test-key")
+
+        reply = await generator.generate("[time] Recipient\nPlease hurry.")
+
+        self.assertEqual(reply, "Oh, what a wonderfully urgent request.")
+        self.assertEqual(generator.last_outcome, "generated")
+        _, request = session.request
+        prompt = request["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("Please hurry.", prompt)
+        self.assertIn("Do not be hateful, abusive", prompt)
+        self.assertIn("Can I help with anything else?", prompt)
+        config = request["json"]["generationConfig"]
+        self.assertEqual(config["maxOutputTokens"], 512)
+        self.assertEqual(config["responseSchema"]["required"], ["reply"])
+
     async def test_returns_only_a_configured_match(self):
         session = FakeSession(
             FakeResponse(200, generate_content_output({"autoreply_key": "apply"}))

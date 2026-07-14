@@ -866,6 +866,7 @@ class Thread:
 
             error_outcomes = {
                 "configuration_error",
+                "delivery_error",
                 "duplicate_guard_error",
                 "http_error",
                 "invalid_response",
