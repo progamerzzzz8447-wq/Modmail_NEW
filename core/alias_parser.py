@@ -4,8 +4,39 @@ import typing
 from itertools import zip_longest
 
 
-SAFE_AI_REPLY_COMMANDS = frozenset({"reply", "freply", "formatreply"})
-FORMATTED_AI_REPLY_COMMANDS = frozenset({"freply", "formatreply"})
+SAFE_AI_REPLY_COMMANDS = frozenset(
+    {
+        "reply",
+        "freply",
+        "formatreply",
+        "areply",
+        "anonreply",
+        "anonymousreply",
+        "fareply",
+        "formatanonreply",
+        "preply",
+        "plainreply",
+        "fpreply",
+        "formatplainreply",
+        "pareply",
+        "plainanonreply",
+        "plainanonymousreply",
+        "fpareply",
+        "formatplainanonreply",
+    }
+)
+FORMATTED_AI_REPLY_COMMANDS = frozenset(
+    {
+        "freply",
+        "formatreply",
+        "fareply",
+        "formatanonreply",
+        "fpreply",
+        "formatplainreply",
+        "fpareply",
+        "formatplainanonreply",
+    }
+)
 
 
 def parse_alias(alias: str, *, split: bool = True) -> typing.List[str]:
@@ -52,15 +83,15 @@ def normalize_alias(alias: str, message: str = "") -> typing.List[str]:
 
 
 def parse_reply_alias(alias: str) -> typing.Optional[typing.List[typing.Tuple[str, str]]]:
-    """Return safe reply-command steps, or None if an alias contains another command."""
+    """Extract reply-command steps while ignoring unrelated alias actions."""
     parsed = []
     for step in parse_alias(alias):
         parts = step.strip().split(maxsplit=1)
         if len(parts) != 2:
-            return None
+            continue
         command, message = parts[0].casefold(), parts[1].strip()
         if command not in SAFE_AI_REPLY_COMMANDS or not message:
-            return None
+            continue
         parsed.append((command, message))
     return parsed or None
 

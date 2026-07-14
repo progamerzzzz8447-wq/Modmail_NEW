@@ -24,8 +24,12 @@ class AliasParserTests(unittest.TestCase):
             ],
         )
 
-    def test_reply_alias_rejects_non_reply_commands(self):
-        self.assertIsNone(parse_reply_alias('"freply Thanks" && "close"'))
+    def test_reply_alias_ignores_non_reply_commands(self):
+        self.assertEqual(
+            parse_reply_alias('"move applications" && "fareply Thanks" && "close"'),
+            [("fareply", "Thanks")],
+        )
+        self.assertIsNone(parse_reply_alias('"move applications" && "close"'))
         self.assertIsNone(parse_reply_alias('"freply"'))
 
     def test_normalize_alias_appends_invocation_text(self):

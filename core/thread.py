@@ -992,7 +992,7 @@ class Thread:
             steps = parse_reply_alias(raw_alias)
             if steps is None:
                 errors.append(
-                    f'Alias "{alias_name}" must contain only reply/freply steps with message text.'
+                    f'Alias "{alias_name}" has no reply-style step with message text.'
                 )
                 continue
 

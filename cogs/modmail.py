@@ -675,7 +675,7 @@ class Modmail(commands.Cog):
             reply_steps = parse_reply_alias(raw_alias)
             if reply_steps is None:
                 raise commands.BadArgument(
-                    "AI autoreply aliases may contain only `reply` or `freply` steps with message text."
+                    "The alias must include at least one reply-style step with message text."
                 )
             if len("\n\n".join(message for _, message in reply_steps)) > 4_000:
                 raise commands.BadArgument(
