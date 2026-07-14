@@ -810,7 +810,13 @@ class Thread:
 
     async def _send_ai_autoreply(self, name: str, response_text: str) -> None:
         """Deliver a configured AI-selected reply and preserve it in the ticket log."""
+        joint_id = secrets.randbits(63) or 1
         embed = discord.Embed(description=response_text, color=self.bot.mod_color)
+        embed.set_author(
+            name="AI-generated reply",
+            icon_url=self.bot.user.display_avatar.url,
+            url=f"https://discordapp.com/users/{self.bot.user.id}#{joint_id}",
+        )
         embed.set_footer(text=AI_REPLY_FOOTER)
         await self.recipient.send(embed=embed)
 
@@ -840,6 +846,42 @@ class Thread:
             )
         except Exception:
             logger.warning("Failed to append an AI autoreply to the ticket log.", exc_info=True)
+
+    def _is_ai_autoreply_message(self, message) -> bool:
+        """Return whether a bot-authored message uses the AI autoreply footer."""
+        if (
+            not message
+            or getattr(message, "author", None) != self.bot.user
+            or not message.embeds
+        ):
+            return False
+        footer = getattr(message.embeds[0], "footer", None)
+        footer_text = getattr(footer, "text", "") or ""
+        return footer_text.startswith(AI_REPLY_FOOTER)
+
+    async def _find_legacy_ai_autoreply_messages(self, staff_message) -> typing.List:
+        """Match an older unlinked AI staff copy to its recipient DM by content and time."""
+        messages = [staff_message]
+        source_embed = staff_message.embeds[0]
+        source_description = source_embed.description or ""
+
+        for user in self.recipients:
+            closest_message = None
+            closest_distance = None
+            async for candidate in user.history(limit=None):
+                if not self._is_ai_autoreply_message(candidate):
+                    continue
+                if (candidate.embeds[0].description or "") != source_description:
+                    continue
+                distance = abs((candidate.created_at - staff_message.created_at).total_seconds())
+                if closest_distance is None or distance < closest_distance:
+                    closest_message = candidate
+                    closest_distance = distance
+            if closest_message is not None:
+                messages.append(closest_message)
+
+        # Deleting the staff copy is still useful if an old DM counterpart cannot be found.
+        return messages
 
     async def _log_ai_check(
         self,
@@ -1743,6 +1785,7 @@ class Thread:
         note: bool = True,
     ) -> typing.Tuple[discord.Message, typing.List[typing.Optional[discord.Message]]]:
         if message1 is not None:
+            is_ai_autoreply = self._is_ai_autoreply_message(message1)
             if note:
                 # For notes, don't require author.url; rely on footer/author.name markers
                 if not message1.embeds or message1.author != self.bot.user:
@@ -1753,7 +1796,7 @@ class Thread:
             else:
                 if (
                     not message1.embeds
-                    or not message1.embeds[0].author.url
+                    or (not message1.embeds[0].author.url and not is_ai_autoreply)
                     or message1.author != self.bot.user
                 ):
                     logger.debug(
@@ -1768,6 +1811,7 @@ class Thread:
             except discord.NotFound:
                 logger.warning(f"Message ID {message_id} not found in channel history.")
                 raise ValueError("Thread message not found.")
+            is_ai_autoreply = self._is_ai_autoreply_message(message1)
 
             if note:
                 # Try to treat as note/persistent note first
@@ -1788,7 +1832,7 @@ class Thread:
             # Non-note path (regular relayed messages): require author.url and colors
             if not (
                 message1.embeds
-                and message1.embeds[0].author.url
+                and (message1.embeds[0].author.url or is_ai_autoreply)
                 and message1.embeds[0].color
                 and message1.author == self.bot.user
             ):
@@ -1813,7 +1857,7 @@ class Thread:
                 raise ValueError("Thread message not found.")
         else:
             async for message1 in self.channel.history():
-                if (
+                is_linked_message = (
                     message1.embeds
                     and message1.embeds[0].author.url
                     and message1.embeds[0].color
@@ -1823,14 +1867,24 @@ class Thread:
                     )
                     and message1.embeds[0].author.url.split("#")[-1].isdigit()
                     and message1.author == self.bot.user
-                ):
+                )
+                is_legacy_ai_autoreply = (
+                    self._is_ai_autoreply_message(message1)
+                    and message1.embeds[0].color
+                    and message1.embeds[0].color.value == self.bot.mod_color
+                )
+                if is_linked_message or is_legacy_ai_autoreply:
                     break
             else:
                 raise ValueError("Thread message not found.")
 
+        author_url = getattr(message1.embeds[0].author, "url", None)
+        if not author_url and self._is_ai_autoreply_message(message1):
+            return await self._find_legacy_ai_autoreply_messages(message1)
+
         try:
-            joint_id = int(message1.embeds[0].author.url.split("#")[-1])
-        except ValueError:
+            joint_id = int(author_url.split("#")[-1])
+        except (AttributeError, ValueError):
             raise ValueError("Malformed thread message.")
 
         messages = [message1]
