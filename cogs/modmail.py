@@ -1723,6 +1723,44 @@ class Modmail(commands.Cog):
         async with safe_typing(ctx):
             await ctx.thread.reply(ctx.message, msg)
 
+    @commands.command(usage="<MESSAGE>")
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.thread_only()
+    async def fakeautoreply(self, ctx, *, message: str):
+        """Send staff-provided text using the AI autoreply presentation."""
+        if len(message) > 4_000:
+            raise commands.BadArgument("Fake AI autoreplies cannot exceed 4,000 characters.")
+
+        delivery_error = None
+        async with safe_typing(ctx):
+            try:
+                await ctx.thread._send_ai_autoreply("Manual fake autoreply", message)
+            except Exception as exc:
+                delivery_error = exc
+
+        await ctx.thread._log_ai_check(
+            ctx.message,
+            message,
+            outcome="delivery_error" if delivery_error is not None else "manual_fake",
+            detail=(
+                f"Manual fake autoreply delivery failed ({type(delivery_error).__name__})."
+                if delivery_error is not None
+                else "A staff member sent a manual fake AI autoreply."
+            ),
+            selected_name="fakeautoreply",
+            response_text=message,
+            delivery_status=(
+                "Manual fake AI autoreply delivery failed."
+                if delivery_error is not None
+                else "Manual fake AI autoreply delivered."
+            ),
+        )
+        if delivery_error is not None:
+            raise delivery_error
+
+        # Treat the manually sent message as a staff response for reminder bookkeeping.
+        self.bot.dispatch("thread_reply", ctx.thread, True, ctx.message, False, False)
+
     @commands.command()
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.thread_only()
