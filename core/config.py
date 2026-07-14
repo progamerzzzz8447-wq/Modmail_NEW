@@ -42,7 +42,7 @@ class ConfigManager:
         "plain_reply_without_command": False,
         # AI autoreplies
         "gemini_ai_enabled": True,
-        "gemini_model": "gemini-3.5-flash",
+        "gemini_model": "gemini-2.5-flash-lite",
         "gemini_log_channel_id": "1526602233737773146",
         # recipient reply reminders
         "recipient_reply_reminder_delay": 43_200,

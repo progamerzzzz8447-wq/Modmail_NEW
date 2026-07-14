@@ -12,10 +12,10 @@
     ]
   },
   "gemini_model": {
-    "default": "`gemini-3.5-flash`",
+    "default": "`gemini-2.5-flash-lite`",
     "description": "The Gemini model used to classify new ticket requests for AI autoreplies.",
     "examples": [
-      "`{prefix}config set gemini_model gemini-3.5-flash`"
+      "`{prefix}config set gemini_model gemini-2.5-flash-lite`"
     ],
     "notes": []
   },

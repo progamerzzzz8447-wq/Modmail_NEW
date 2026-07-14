@@ -22,12 +22,15 @@ class FakeResponse:
 
 class FakeSession:
     def __init__(self, response):
-        self.response = response
+        self.responses = response if isinstance(response, list) else [response]
         self.request = None
+        self.calls = 0
 
     def post(self, url, **kwargs):
         self.request = (url, kwargs)
-        return self.response
+        response = self.responses[min(self.calls, len(self.responses) - 1)]
+        self.calls += 1
+        return response
 
 
 def interaction_output(value):
@@ -59,7 +62,25 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reviewer.last_detail, "Selected autoreply: apply.")
         _, request = session.request
         self.assertFalse(request["json"]["store"])
+        self.assertEqual(request["json"]["model"], "gemini-2.5-flash-lite")
+        self.assertNotIn("thinking_level", request["json"]["generation_config"])
+        self.assertEqual(request["json"]["generation_config"]["max_output_tokens"], 256)
         self.assertEqual(request["headers"]["x-goog-api-key"], "test-key")
+
+    async def test_newer_flash_lite_uses_minimal_thinking(self):
+        session = FakeSession(
+            FakeResponse(200, interaction_output({"autoreply_key": "__NO_MATCH__"}))
+        )
+        reviewer = GeminiAutoReplyReviewer(
+            session, "test-key", model="gemini-3.1-flash-lite"
+        )
+
+        await reviewer.classify("A question", {"apply": "Apply here."})
+
+        _, request = session.request
+        self.assertEqual(
+            request["json"]["generation_config"]["thinking_level"], "minimal"
+        )
 
     async def test_no_match_returns_none(self):
         session = FakeSession(
@@ -100,6 +121,21 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await reviewer.classify("How do I apply?", {"apply": "Apply here."}))
         self.assertEqual(reviewer.last_outcome, "http_error")
         self.assertEqual(reviewer.last_detail, "Gemini returned HTTP 429.")
+
+    async def test_transient_server_error_retries_once(self):
+        session = FakeSession(
+            [
+                FakeResponse(500, {}),
+                FakeResponse(200, interaction_output({"autoreply_key": "apply"})),
+            ]
+        )
+        reviewer = GeminiAutoReplyReviewer(session, "key")
+
+        selected = await reviewer.classify("How do I apply?", {"apply": "Apply here."})
+
+        self.assertEqual(selected, "apply")
+        self.assertEqual(session.calls, 2)
+        self.assertEqual(reviewer.last_outcome, "matched")
 
     def test_build_ticket_text_includes_attachment_names_and_truncates(self):
         message = SimpleNamespace(

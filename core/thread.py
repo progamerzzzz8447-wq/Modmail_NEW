@@ -859,7 +859,10 @@ class Thread:
                 color=color,
                 timestamp=discord.utils.utcnow(),
             )
-            thread_reference = getattr(self.channel, "mention", f"Channel ID: {self.channel.id}")
+            channel_name = getattr(self.channel, "name", "unknown-ticket")
+            thread_reference = f"#{channel_name} (`{self.channel.id}`)"
+            if getattr(audit_channel, "guild", None) == getattr(self.channel, "guild", None):
+                thread_reference = f"{self.channel.mention} — {thread_reference}"
             embed.description = (
                 f"**Ticket:** {thread_reference}\n"
                 f"**Recipient:** {self.recipient.mention} (`{self.recipient.id}`)"
@@ -945,7 +948,7 @@ class Thread:
         reviewer = GeminiAutoReplyReviewer(
             self.bot.session,
             str(api_key),
-            model=str(self.bot.config.get("gemini_model") or "gemini-3.5-flash"),
+            model=str(self.bot.config.get("gemini_model") or "gemini-2.5-flash-lite"),
         )
         selected = await reviewer.classify(ticket_text, autoreplies)
         response_text = autoreplies.get(selected) if selected is not None else None

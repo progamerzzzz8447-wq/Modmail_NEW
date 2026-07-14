@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import typing
@@ -41,7 +42,7 @@ class GeminiAutoReplyReviewer:
         session: typing.Any,
         api_key: str,
         *,
-        model: str = "gemini-3.5-flash",
+        model: str = "gemini-2.5-flash-lite",
         timeout_seconds: float = 12,
     ):
         self.session = session
@@ -98,10 +99,15 @@ class GeminiAutoReplyReviewer:
             "Never write a reply or invent a category.\n\n"
             + json.dumps(review_input, ensure_ascii=False)
         )
+        generation_config = {"max_output_tokens": 256}
+        if not self.model.startswith("gemini-2.5-"):
+            generation_config["thinking_level"] = "minimal"
+
         payload = {
             "model": self.model,
             "store": False,
             "input": prompt,
+            "generation_config": generation_config,
             "response_format": {
                 "type": "text",
                 "mime_type": "application/json",
@@ -119,24 +125,40 @@ class GeminiAutoReplyReviewer:
             },
         }
 
-        try:
-            async with self.session.post(
-                GEMINI_INTERACTIONS_URL,
-                json=payload,
-                headers={"x-goog-api-key": self.api_key},
-                timeout=self.timeout,
-            ) as response:
-                if response.status != 200:
+        data = None
+        retryable_statuses = {500, 502, 503, 504}
+        for attempt in range(2):
+            try:
+                async with self.session.post(
+                    GEMINI_INTERACTIONS_URL,
+                    json=payload,
+                    headers={"x-goog-api-key": self.api_key},
+                    timeout=self.timeout,
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        break
+                    if response.status in retryable_statuses and attempt == 0:
+                        logger.warning(
+                            "Gemini ticket review returned HTTP %s; retrying once.",
+                            response.status,
+                        )
+                        await asyncio.sleep(0.5)
+                        continue
+
                     self.last_outcome = "http_error"
-                    self.last_detail = f"Gemini returned HTTP {response.status}."
+                    retry_detail = " after one retry" if attempt else ""
+                    self.last_detail = f"Gemini returned HTTP {response.status}{retry_detail}."
                     logger.warning("Gemini ticket review failed with HTTP %s.", response.status)
                     return None
-                data = await response.json()
-        except Exception as exc:
-            self.last_outcome = "request_error"
-            self.last_detail = f"Gemini request failed ({type(exc).__name__})."
-            logger.warning("Gemini ticket review failed; continuing without an autoreply.", exc_info=True)
-            return None
+            except Exception as exc:
+                self.last_outcome = "request_error"
+                self.last_detail = f"Gemini request failed ({type(exc).__name__})."
+                logger.warning(
+                    "Gemini ticket review failed; continuing without an autoreply.",
+                    exc_info=True,
+                )
+                return None
 
         output_text = self._extract_output_text(data)
         if output_text is None:
