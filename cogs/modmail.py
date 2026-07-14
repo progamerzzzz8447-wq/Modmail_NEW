@@ -17,7 +17,12 @@ from dateutil import parser
 
 from core import checks
 from core.alias_parser import parse_autoreply_rule_spec, parse_reply_alias
-from core.ai_reviewer import GeminiAnnoyReplyGenerator, GeminiHelpfulReplyGenerator, NO_MATCH
+from core.ai_reviewer import (
+    AI_REPLY_FOOTER,
+    GeminiAnnoyReplyGenerator,
+    GeminiHelpfulReplyGenerator,
+    NO_MATCH,
+)
 from core.models import DMDisabled, PermissionLevel, SimilarCategoryConverter, getLogger
 from core.paginator import EmbedPaginatorSession
 from core.thread import Thread
@@ -1769,6 +1774,7 @@ class Modmail(commands.Cog):
         command_name: str,
         log_name: str,
         tone_label: str,
+        staff_only: bool = False,
     ):
         """Generate, deliver, and audit a manual AI reply from the full thread history."""
         api_key = self.bot.config.get("gemini_api_key", convert=False)
@@ -1825,11 +1831,22 @@ class Modmail(commands.Cog):
             response = await generator.generate(transcript)
             if response is not None:
                 closing = "Can I help with anything else?"
-                maximum_generated_length = 4_000 - len(closing) - 2
+                # Leave extra room in raw mode for its disclosure and code-block wrapper.
+                maximum_response_length = 3_850 if staff_only else 4_000
+                maximum_generated_length = maximum_response_length - len(closing) - 2
                 response = response[:maximum_generated_length].rstrip()
                 response = f"{response}\n\n{closing}"
                 try:
-                    await ctx.thread._send_ai_autoreply(log_name, response)
+                    if staff_only:
+                        raw_text = f"{response}\n\n{AI_REPLY_FOOTER}"
+                        await ctx.send(
+                            embed=discord.Embed(
+                                description=f"```\n{escape_code_block(raw_text)}\n```",
+                                color=self.bot.main_color,
+                            )
+                        )
+                    else:
+                        await ctx.thread._send_ai_autoreply(log_name, response)
                 except Exception as exc:
                     delivery_error = exc
 
@@ -1860,10 +1877,19 @@ class Modmail(commands.Cog):
                 ),
                 selected_name=command_name,
                 response_text=response,
-                delivery_status=f"Manual {tone_label} AI reply delivery failed.",
+                delivery_status=(
+                    f"Staff-only {tone_label} AI draft delivery failed."
+                    if staff_only
+                    else f"Manual {tone_label} AI reply delivery failed."
+                ),
             )
             raise delivery_error
 
+        delivery_status = (
+            f"Staff-only {tone_label} AI draft generated; nothing was sent to the recipient."
+            if staff_only
+            else f"Manual {tone_label} AI reply delivered."
+        )
         await ctx.thread._log_ai_check(
             ctx.message,
             transcript,
@@ -1871,21 +1897,26 @@ class Modmail(commands.Cog):
             detail=f"Generated from {message_count} thread messages.",
             selected_name=command_name,
             response_text=response,
-            delivery_status=f"Manual {tone_label} AI reply delivered.",
+            delivery_status=delivery_status,
         )
-        self.bot.dispatch("thread_reply", ctx.thread, True, ctx.message, False, False)
+        if not staff_only:
+            self.bot.dispatch("thread_reply", ctx.thread, True, ctx.message, False, False)
 
     @commands.command()
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.thread_only()
-    async def aireply(self, ctx):
+    async def aireply(self, ctx, mode: str = None):
         """Generate and send a helpful AI response using the complete thread history."""
+        if mode is not None and mode.casefold() != "raw":
+            raise commands.BadArgument(f"Use `{self.bot.prefix}aireply` or `{self.bot.prefix}aireply raw`.")
+        staff_only = mode is not None
         await self._send_generated_ai_reply(
             ctx,
             GeminiHelpfulReplyGenerator,
-            command_name="aireply",
+            command_name="aireply raw" if staff_only else "aireply",
             log_name="Manual helpful AI reply",
             tone_label="helpful",
+            staff_only=staff_only,
         )
 
     @commands.command()
