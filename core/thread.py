@@ -866,6 +866,7 @@ class Thread:
 
             error_outcomes = {
                 "configuration_error",
+                "duplicate_guard_error",
                 "http_error",
                 "invalid_response",
                 "request_error",
@@ -1121,8 +1122,55 @@ class Thread:
         response_text = autoreplies.get(selected) if selected is not None else None
         delivery_error = None
         if selected is not None:
+            alias_action = alias_actions.get(selected)
+            autoreply_type = " ".join(
+                str(alias_action["alias"] if alias_action is not None else selected)
+                .casefold()
+                .split()
+            )
             try:
-                alias_action = alias_actions.get(selected)
+                claimed = await self.bot.api.claim_ai_autoreply(
+                    self.channel.id,
+                    autoreply_type,
+                    selected,
+                )
+            except Exception as exc:
+                logger.error(
+                    "AI autoreply blocked because its durable duplicate guard failed.",
+                    exc_info=True,
+                )
+                await self._log_ai_check(
+                    message,
+                    ticket_text,
+                    outcome="duplicate_guard_error",
+                    detail=(
+                        f"Gemini selected `{selected}`, but the durable duplicate guard failed "
+                        f"({type(exc).__name__})."
+                    ),
+                    selected_name=selected,
+                    delivery_status=(
+                        "No AI reply sent and no alias commands run because duplicate safety "
+                        "could not be confirmed."
+                    ),
+                )
+                return
+
+            if not claimed:
+                await self._log_ai_check(
+                    message,
+                    ticket_text,
+                    outcome="duplicate_suppressed",
+                    detail=(
+                        f"Autoreply type `{autoreply_type}` was already sent in this ticket."
+                    ),
+                    selected_name=selected,
+                    delivery_status=(
+                        "Duplicate suppressed; no AI reply was sent and no alias commands were run."
+                    ),
+                )
+                return
+
+            try:
                 if alias_action is None:
                     await self._send_ai_autoreply(selected, response_text)
                 else:

@@ -11,6 +11,7 @@ from aiohttp import ClientResponseError, ClientResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import ConfigurationError
 
+from core.ai_reviewer import claim_ai_autoreply_once
 from core.models import InvalidConfigError, getLogger
 
 logger = getLogger(__name__)
@@ -614,6 +615,7 @@ class MongoDBClient(ApiClient):
                 },
                 "closer": None,
                 "messages": [],
+                "ai_autoreplies_sent": [],
             }
         )
         logger.debug("Created a log entry, key %s.", key)
@@ -692,6 +694,26 @@ class MongoDBClient(ApiClient):
             {"channel_id": channel_id},
             {"$push": {"messages": data}},
             return_document=True,
+        )
+
+    async def claim_ai_autoreply(
+        self,
+        channel_id: Union[int, str],
+        autoreply_type: str,
+        display_name: str = "",
+    ) -> bool:
+        """Atomically reserve one autoreply type for a ticket.
+
+        The reservation is deliberately durable and is never automatically released. This
+        gives AI autoreplies at-most-once delivery even if an alias only partially executes,
+        two messages race, or the bot restarts.
+        """
+        return await claim_ai_autoreply_once(
+            self.logs,
+            channel_id,
+            autoreply_type,
+            display_name=display_name,
+            bot_user_id=self.bot.user.id,
         )
 
     async def post_log(self, channel_id: Union[int, str], data: dict) -> dict:

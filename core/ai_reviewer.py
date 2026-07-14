@@ -21,6 +21,72 @@ AI_REPLY_FOOTER = (
     "This reply is AI generated. If you require further assistance, please reply to this message"
 )
 
+
+async def claim_ai_autoreply_once(
+    logs: typing.Any,
+    channel_id: typing.Union[int, str],
+    autoreply_type: str,
+    *,
+    display_name: str = "",
+    bot_user_id: typing.Union[int, str, None] = None,
+) -> bool:
+    """Atomically and durably reserve one autoreply type for a ticket."""
+    channel_id = str(channel_id)
+    autoreply_type = " ".join(str(autoreply_type).casefold().split())
+    if not autoreply_type:
+        raise ValueError("An AI autoreply type is required.")
+
+    claim_query = {
+        "channel_id": channel_id,
+        "ai_autoreplies_sent": {"$ne": autoreply_type},
+    }
+    display_name = str(display_name or "").strip()
+    legacy_message_match = None
+    if display_name and bot_user_id is not None:
+        legacy_message_match = {
+            "author.id": str(bot_user_id),
+            "content": {
+                "$regex": (
+                    r"^\[AI autoreply:\s*"
+                    + re.escape(display_name)
+                    + r"\](?:\r?\n|$)"
+                ),
+                "$options": "i",
+            },
+        }
+        # Older ticket logs predate ai_autoreplies_sent, but their logged reply marker
+        # still proves this display type was delivered.
+        claim_query["$nor"] = [
+            {"messages": {"$elemMatch": legacy_message_match}},
+        ]
+
+    result = await logs.update_one(
+        claim_query,
+        {"$addToSet": {"ai_autoreplies_sent": autoreply_type}},
+    )
+    if result.modified_count == 1:
+        return True
+
+    # The same update result is returned when the type is already present and when the
+    # ticket log is missing. Distinguish those cases so a database/setup fault cannot be
+    # mistaken for a safe duplicate suppression.
+    duplicate_filters = [{"ai_autoreplies_sent": autoreply_type}]
+    if legacy_message_match is not None:
+        duplicate_filters.append({"messages": {"$elemMatch": legacy_message_match}})
+    duplicate = await logs.find_one(
+        {
+            "channel_id": channel_id,
+            "$or": duplicate_filters,
+        },
+        {"_id": 1},
+    )
+    if duplicate is not None:
+        return False
+    log = await logs.find_one({"channel_id": channel_id}, {"_id": 1})
+    if log is None:
+        raise RuntimeError("The ticket log does not exist for the AI duplicate guard.")
+    raise RuntimeError("The AI autoreply type could not be reserved.")
+
 APPLICATION_TRIGGER_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE | re.DOTALL)
     for pattern in (
