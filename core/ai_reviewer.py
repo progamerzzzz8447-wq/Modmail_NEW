@@ -16,7 +16,7 @@ GEMINI_GENERATE_CONTENT_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
 NO_MATCH = "__NO_MATCH__"
-AI_REVIEW_MESSAGE_LIMIT = 4
+AI_REVIEW_MESSAGE_LIMIT = None
 AI_REPLY_FOOTER = (
     "This reply is AI generated. If you require further assistance, please reply to this message"
 )
@@ -60,15 +60,15 @@ def has_configured_trigger(text: str, trigger_terms: typing.Iterable[str]) -> bo
 
 
 class ApplicationReviewWindow:
-    """Track the bounded set of recipient messages eligible for one AI check."""
+    """Keep recipient messages eligible until one triggers the ticket's AI check."""
 
-    def __init__(self, limit: int = AI_REVIEW_MESSAGE_LIMIT):
-        self.limit = max(int(limit), 1)
+    def __init__(self, limit: typing.Optional[int] = AI_REVIEW_MESSAGE_LIMIT):
+        self.limit = max(int(limit), 1) if limit is not None else None
         self.messages_seen = 0
         self.closed = False
 
     def consider(self, text: str, *, triggered: typing.Optional[bool] = None) -> bool:
-        """Return True once for a qualifying message within the configured limit."""
+        """Return True once for the first qualifying recipient message."""
         if self.closed:
             return False
 
@@ -77,7 +77,7 @@ class ApplicationReviewWindow:
         if is_triggered:
             self.closed = True
             return True
-        if self.messages_seen >= self.limit:
+        if self.limit is not None and self.messages_seen >= self.limit:
             self.closed = True
         return False
 

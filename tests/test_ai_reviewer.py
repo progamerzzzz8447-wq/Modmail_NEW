@@ -192,24 +192,24 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertFalse(has_configured_trigger("The staffing level is fine.", ["staff"]))
-        self.assertEqual(AI_REVIEW_MESSAGE_LIMIT, 4)
+        self.assertIsNone(AI_REVIEW_MESSAGE_LIMIT)
 
-    def test_application_review_window_checks_once_within_first_four_messages(self):
+    def test_application_review_window_stays_open_until_first_trigger(self):
         window = ApplicationReviewWindow()
 
-        self.assertFalse(window.consider("Hello"))
-        self.assertFalse(window.consider("I need some help"))
-        self.assertFalse(window.consider("Is anybody there?"))
+        for index in range(100):
+            self.assertFalse(window.consider(f"Unrelated message {index}"))
+        self.assertFalse(window.closed)
         self.assertTrue(window.consider("How can I apply?"))
         self.assertTrue(window.closed)
-        self.assertEqual(window.messages_seen, 4)
+        self.assertEqual(window.messages_seen, 101)
         self.assertFalse(window.consider("Another application question"))
 
-        expired = ApplicationReviewWindow()
+        limited = ApplicationReviewWindow(limit=4)
         for text in ("one", "two", "three", "four"):
-            self.assertFalse(expired.consider(text))
-        self.assertTrue(expired.closed)
-        self.assertFalse(expired.consider("I want a job"))
+            self.assertFalse(limited.consider(text))
+        self.assertTrue(limited.closed)
+        self.assertFalse(limited.consider("I want a job"))
 
 
 if __name__ == "__main__":

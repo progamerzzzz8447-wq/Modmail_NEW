@@ -936,7 +936,7 @@ class Thread:
         return ticket_text
 
     async def consider_ai_autoreply(self, message) -> None:
-        """Review at most once when the first four recipient messages contain a trigger."""
+        """Review at most once when any recipient message contains a configured trigger."""
         if message is None:
             return
 

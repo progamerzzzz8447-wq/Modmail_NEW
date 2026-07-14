@@ -48,8 +48,8 @@ class Modmail(commands.Cog):
 
         # The opening message is considered during thread setup so a matching
         # autoreply can still be delivered before the normal opened receipt.
-        # Subsequent recipient messages are considered here until four total
-        # recipient messages have been scanned or Gemini has run once.
+        # Every subsequent recipient message remains eligible until Gemini has
+        # run once for this ticket.
         if getattr(thread, "_initial_message_id", None) != getattr(message, "id", None):
             try:
                 await thread.consider_ai_autoreply(message)
@@ -691,8 +691,8 @@ class Modmail(commands.Cog):
 
             key = alias_name
             response_description = (
-                f'`{entry["name"]}` will use alias `{alias_name}` when a first-four message '
-                "contains one of its must-mention terms."
+                f'`{entry["name"]}` will use alias `{alias_name}` when any recipient message '
+                "contains one of its must-mention terms; the ticket can trigger only once."
             )
         else:
             key = name.casefold().strip()
