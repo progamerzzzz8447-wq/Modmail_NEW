@@ -8,6 +8,7 @@ import time
 import traceback
 import typing
 import warnings
+from collections.abc import Mapping
 from datetime import timedelta, datetime, timezone
 from types import SimpleNamespace
 
@@ -24,7 +25,10 @@ from core.ai_reviewer import (
     ApplicationReviewWindow,
     GeminiAutoReplyReviewer,
     build_ticket_text,
+    has_application_trigger,
+    has_configured_trigger,
 )
+from core.alias_parser import FORMATTED_AI_REPLY_COMMANDS, parse_reply_alias
 from core.models import DMDisabled, DummyMessage, PermissionLevel, getLogger
 from core.ticket_opened_v2 import send_ticket_opened
 from core import checks
@@ -938,7 +942,10 @@ class Thread:
                 return
 
             ticket_text = self._ai_ticket_text(message)
-            if not self._ai_review_window.consider(ticket_text):
+            if not self._ai_review_window.consider(
+                ticket_text,
+                triggered=self._matches_ai_autoreply_trigger(ticket_text),
+            ):
                 self._ai_review_completed = self._ai_review_window.closed
                 return
 
@@ -946,6 +953,74 @@ class Thread:
             # regardless of the outcome or whether an autoreply matches.
             self._ai_review_completed = True
             await self._run_ai_review(message, ticket_text)
+
+    def _matches_ai_autoreply_trigger(self, ticket_text: str) -> bool:
+        """Check legacy application wording and per-rule must-mention terms."""
+        has_legacy_autoreply = False
+        for entry in (self.bot.config.get("autoreplies") or {}).values():
+            if isinstance(entry, Mapping):
+                if has_configured_trigger(ticket_text, entry.get("triggers") or []):
+                    return True
+            else:
+                has_legacy_autoreply = True
+        return has_legacy_autoreply and has_application_trigger(ticket_text)
+
+    def _resolve_ai_autoreplies(
+        self, ticket_text: str
+    ) -> typing.Tuple[typing.Dict[str, str], typing.List[str]]:
+        """Resolve only rules whose required trigger matched the recipient message."""
+        choices = {}
+        errors = []
+        aliases = getattr(self.bot, "aliases", {}) or {}
+
+        for key, entry in (self.bot.config.get("autoreplies") or {}).items():
+            if not isinstance(entry, Mapping):
+                if has_application_trigger(ticket_text):
+                    choices[str(key)] = str(entry)
+                continue
+
+            if not has_configured_trigger(ticket_text, entry.get("triggers") or []):
+                continue
+
+            display_name = str(entry.get("name") or key).strip()
+            alias_name = str(entry.get("alias") or "").casefold().strip()
+            raw_alias = aliases.get(alias_name)
+            if raw_alias is None:
+                errors.append(f'Alias "{alias_name or key}" does not exist.')
+                continue
+
+            steps = parse_reply_alias(raw_alias)
+            if steps is None:
+                errors.append(
+                    f'Alias "{alias_name}" must contain only reply/freply steps with message text.'
+                )
+                continue
+
+            messages = []
+            try:
+                for command, response_text in steps:
+                    if command in FORMATTED_AI_REPLY_COMMANDS:
+                        response_text = self.bot.formatter.format(
+                            response_text,
+                            channel=self.channel,
+                            recipient=self.recipient,
+                            author=self.bot.user,
+                        )
+                    messages.append(response_text)
+            except Exception as exc:
+                errors.append(f'Alias "{alias_name}" could not be formatted ({type(exc).__name__}).')
+                continue
+
+            combined_message = "\n\n".join(messages)
+            if len(combined_message) > 4_000:
+                errors.append(f'Alias "{alias_name}" exceeds the 4,000-character autoreply limit.')
+                continue
+            if display_name in choices:
+                errors.append(f'Autoreply display name "{display_name}" is duplicated.')
+                continue
+            choices[display_name] = combined_message
+
+        return choices, errors
 
     async def _run_ai_review(self, message, ticket_text: str) -> None:
         """Run Gemini for one qualifying recipient message, failing open on every error."""
@@ -956,14 +1031,18 @@ class Thread:
             if is_initial_message
             else "No AI reply sent; the existing ticket continued normally."
         )
-        autoreplies = self.bot.config.get("autoreplies") or {}
+        autoreplies, configuration_errors = self._resolve_ai_autoreplies(ticket_text)
         api_key = self.bot.config.get("gemini_api_key", convert=False)
         if not autoreplies:
             await self._log_ai_check(
                 message,
                 ticket_text,
-                outcome="skipped",
-                detail="No autoreplies are configured.",
+                outcome="configuration_error" if configuration_errors else "skipped",
+                detail=(
+                    " ".join(configuration_errors)
+                    if configuration_errors
+                    else "No autoreplies are configured."
+                ),
                 delivery_status=fallback_status,
             )
             return

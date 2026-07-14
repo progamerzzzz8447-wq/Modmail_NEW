@@ -1,16 +1,16 @@
-import base64
 import functools
 import contextlib
 import re
 import typing
 from datetime import datetime, timezone
 from difflib import get_close_matches
-from itertools import takewhile, zip_longest
+from itertools import takewhile
 from urllib import parse
 
 import discord
 from discord.ext import commands
 
+from core.alias_parser import normalize_alias, parse_alias
 from core.models import getLogger
 
 
@@ -368,55 +368,6 @@ def create_not_found_embed(word, possibilities, name, n=2, cutoff=0.6) -> discor
     if val:
         embed.description += "\nHowever, perhaps you meant...\n" + "\n".join(val)
     return embed
-
-
-def parse_alias(alias, *, split=True):
-    def encode_alias(m):
-        return "\x1aU" + base64.b64encode(m.group(1).encode()).decode() + "\x1aU"
-
-    def decode_alias(m):
-        return base64.b64decode(m.group(1).encode()).decode()
-
-    alias = re.sub(
-        r"(?:(?<=^)(?:\s*(?<!\\)(?:\")\s*)|(?<=&&)(?:\s*(?<!\\)(?:\")\s*))(.+?)"
-        r"(?:(?:\s*(?<!\\)(?:\")\s*)(?=&&)|(?:\s*(?<!\\)(?:\")\s*)(?=$))",
-        encode_alias,
-        alias,
-    ).strip()
-
-    aliases = []
-    if not alias:
-        return aliases
-
-    if split:
-        iterate = re.split(r"\s*&&\s*", alias)
-    else:
-        iterate = [alias]
-
-    for a in iterate:
-        a = re.sub(r"\x1AU(.+?)\x1AU", decode_alias, a)
-        if a[0] == a[-1] == '"':
-            a = a[1:-1]
-        aliases.append(a)
-
-    return aliases
-
-
-def normalize_alias(alias, message=""):
-    aliases = parse_alias(alias)
-    contents = parse_alias(message, split=False)
-
-    final_aliases = []
-    for a, content in zip_longest(aliases, contents):
-        if a is None:
-            break
-
-        if content:
-            final_aliases.append(f"{a} {content}")
-        else:
-            final_aliases.append(a)
-
-    return final_aliases
 
 
 def format_description(i, names):

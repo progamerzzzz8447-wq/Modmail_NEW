@@ -47,6 +47,18 @@ def has_application_trigger(text: str) -> bool:
     return any(pattern.search(normalized) for pattern in APPLICATION_TRIGGER_PATTERNS)
 
 
+def has_configured_trigger(text: str, trigger_terms: typing.Iterable[str]) -> bool:
+    """Match configured words or phrases case-insensitively on word boundaries."""
+    normalized = " ".join((text or "").casefold().split())
+    for term in trigger_terms:
+        normalized_term = " ".join(str(term).casefold().split())
+        if normalized_term and re.search(
+            rf"(?<!\w){re.escape(normalized_term)}(?!\w)", normalized
+        ):
+            return True
+    return False
+
+
 class ApplicationReviewWindow:
     """Track the bounded set of recipient messages eligible for one AI check."""
 
@@ -55,13 +67,14 @@ class ApplicationReviewWindow:
         self.messages_seen = 0
         self.closed = False
 
-    def consider(self, text: str) -> bool:
+    def consider(self, text: str, *, triggered: typing.Optional[bool] = None) -> bool:
         """Return True once for a qualifying message within the configured limit."""
         if self.closed:
             return False
 
         self.messages_seen += 1
-        if has_application_trigger(text):
+        is_triggered = triggered if triggered is not None else has_application_trigger(text)
+        if is_triggered:
             self.closed = True
             return True
         if self.messages_seen >= self.limit:

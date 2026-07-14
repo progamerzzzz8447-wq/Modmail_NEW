@@ -8,6 +8,7 @@ from core.ai_reviewer import (
     GeminiAutoReplyReviewer,
     build_ticket_text,
     has_application_trigger,
+    has_configured_trigger,
 )
 
 
@@ -184,6 +185,13 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(has_application_trigger("My apple juice is missing."))
         self.assertFalse(has_application_trigger("When does flight 123 depart?"))
+        self.assertTrue(
+            has_configured_trigger(
+                "I would like to become cabin crew.",
+                ["apply", "become", "staff"],
+            )
+        )
+        self.assertFalse(has_configured_trigger("The staffing level is fine.", ["staff"]))
         self.assertEqual(AI_REVIEW_MESSAGE_LIMIT, 4)
 
     def test_application_review_window_checks_once_within_first_four_messages(self):

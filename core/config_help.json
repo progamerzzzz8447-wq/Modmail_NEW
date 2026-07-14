@@ -8,8 +8,8 @@
     ],
     "notes": [
       "Requires the `GEMINI_API_KEY` environment variable and at least one configured `{prefix}autoreply`.",
-      "Gemini selects an existing set message; it does not compose the reply.",
-      "If none of the first four recipient messages contain application-related wording, Gemini is not called."
+      "Gemini selects an existing set message or a configured reply/freply alias; it does not compose the reply.",
+      "Alias-backed rules call Gemini only when one of the first four recipient messages contains a configured must-mention word or phrase."
     ]
   },
   "gemini_model": {

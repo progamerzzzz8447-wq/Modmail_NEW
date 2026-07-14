@@ -16,6 +16,7 @@ from discord.utils import escape_markdown
 from dateutil import parser
 
 from core import checks
+from core.alias_parser import parse_autoreply_rule_spec, parse_reply_alias
 from core.ai_reviewer import NO_MATCH
 from core.models import DMDisabled, PermissionLevel, SimilarCategoryConverter, getLogger
 from core.paginator import EmbedPaginatorSession
@@ -588,17 +589,23 @@ class Modmail(commands.Cog):
         """
         Manage the set messages Gemini may select for a new ticket.
 
-        Create or update one with:
-        - `{prefix}autoreply set apply Your application instructions here.`
+        Create an alias-backed rule with:
+        - `{prefix}autoreply create "NAME: How can I apply"`
+          `["MUST MENTION TO CHECK": apply, application, become, staff] apply`
+
+        The final value is an existing reply/freply alias. Quoted multiline aliases
+        and multiple reply steps separated by `&&` are supported.
         """
         autoreplies = self.bot.config["autoreplies"]
         if name is not None:
-            if name not in autoreplies:
+            key = self._find_autoreply_key(autoreplies, name)
+            if key is None:
                 embed = create_not_found_embed(name, autoreplies.keys(), "Autoreply")
             else:
+                entry = autoreplies[key]
                 embed = discord.Embed(
-                    title=f'Autoreply - "{name}"',
-                    description=autoreplies[name],
+                    title=f'Autoreply - "{key}"',
+                    description=self._format_autoreply_entry(key, entry),
                     color=self.bot.main_color,
                 )
             return await ctx.send(embed=embed)
@@ -608,8 +615,9 @@ class Modmail(commands.Cog):
                 embed=discord.Embed(
                     color=self.bot.error_color,
                     description=(
-                        "No AI autoreplies are configured. Add one with "
-                        f"`{self.bot.prefix}autoreply set <name> <message>`."
+                        "No AI autoreplies are configured. Create one with "
+                        f"`{self.bot.prefix}autoreply create \"NAME: ...\" "
+                        "[\"MUST MENTION TO CHECK\": word, phrase] alias-name`."
                     ),
                 )
             )
@@ -621,33 +629,95 @@ class Modmail(commands.Cog):
         for index, (reply_name, value) in enumerate(sorted(autoreplies.items())):
             embeds[index // 10].add_field(
                 name=reply_name,
-                value=return_or_truncate(value, 350),
+                value=return_or_truncate(self._format_autoreply_entry(reply_name, value), 350),
                 inline=False,
             )
         return await EmbedPaginatorSession(ctx, *embeds).run()
 
+    @staticmethod
+    def _format_autoreply_entry(key, entry):
+        if not isinstance(entry, dict):
+            return str(entry)
+        triggers = ", ".join(f"`{term}`" for term in (entry.get("triggers") or []))
+        return (
+            f"**Name:** {entry.get('name') or key}\n"
+            f"**Must mention:** {triggers or '[none]'}\n"
+            f"**Alias:** `{entry.get('alias') or '[missing]'}`"
+        )
+
+    @staticmethod
+    def _find_autoreply_key(autoreplies, name):
+        normalized = str(name).casefold().strip()
+        if normalized in autoreplies:
+            return normalized
+        for key, entry in autoreplies.items():
+            if isinstance(entry, dict) and str(entry.get("name", "")).casefold() == normalized:
+                return key
+        return None
+
     @autoreply.command(name="set", aliases=["add", "edit", "create"])
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def autoreply_set(self, ctx, name: str.lower, *, value: commands.clean_content):
+    async def autoreply_set(self, ctx, name: str, *, value: commands.clean_content):
         """Create or update an AI-selectable set message."""
         autoreplies = self.bot.config["autoreplies"]
-        if name.upper() == NO_MATCH:
-            raise commands.BadArgument("That autoreply name is reserved.")
-        if len(name) > 100:
-            raise commands.BadArgument("Autoreply names cannot be longer than 100 characters.")
-        if len(value) > 4_000:
-            raise commands.BadArgument("Autoreply messages cannot be longer than 4,000 characters.")
-        if name not in autoreplies and len(autoreplies) >= 25:
+        if re.match(r"\s*name\s*:", name, re.IGNORECASE):
+            try:
+                entry = parse_autoreply_rule_spec(name, value)
+            except ValueError as exc:
+                raise commands.BadArgument(str(exc)) from exc
+
+            alias_name = entry["alias"]
+            raw_alias = self.bot.aliases.get(alias_name)
+            if raw_alias is None:
+                raise commands.BadArgument(
+                    f"Alias `{alias_name}` does not exist. Create it before this autoreply rule."
+                )
+            reply_steps = parse_reply_alias(raw_alias)
+            if reply_steps is None:
+                raise commands.BadArgument(
+                    "AI autoreply aliases may contain only `reply` or `freply` steps with message text."
+                )
+            if len("\n\n".join(message for _, message in reply_steps)) > 4_000:
+                raise commands.BadArgument(
+                    "The combined alias replies cannot be longer than 4,000 characters."
+                )
+            if entry["name"].upper() == NO_MATCH or alias_name.upper() == NO_MATCH:
+                raise commands.BadArgument("That autoreply name is reserved.")
+            for existing_key, existing_entry in autoreplies.items():
+                if existing_key == alias_name or not isinstance(existing_entry, dict):
+                    continue
+                if str(existing_entry.get("name", "")).casefold() == entry["name"].casefold():
+                    raise commands.BadArgument("Another autoreply already uses that display name.")
+
+            key = alias_name
+            response_description = (
+                f'`{entry["name"]}` will use alias `{alias_name}` when a first-four message '
+                "contains one of its must-mention terms."
+            )
+        else:
+            key = name.casefold().strip()
+            entry = str(value)
+            if key.upper() == NO_MATCH:
+                raise commands.BadArgument("That autoreply name is reserved.")
+            if not key or len(key) > 100:
+                raise commands.BadArgument("Autoreply names cannot be longer than 100 characters.")
+            if len(entry) > 4_000:
+                raise commands.BadArgument(
+                    "Autoreply messages cannot be longer than 4,000 characters."
+                )
+            response_description = f"`{key}` is ready for Gemini to select on new tickets."
+
+        if key not in autoreplies and len(autoreplies) >= 25:
             raise commands.BadArgument("You can configure up to 25 AI autoreplies.")
 
-        existed = name in autoreplies
-        autoreplies[name] = value
+        existed = key in autoreplies
+        autoreplies[key] = entry
         await self.bot.config.update()
         action = "Updated" if existed else "Created"
         await ctx.send(
             embed=discord.Embed(
                 title=f"{action} AI autoreply",
-                description=f"`{name}` is ready for Gemini to select on new tickets.",
+                description=response_description,
                 color=self.bot.main_color,
             )
         )
@@ -657,17 +727,18 @@ class Modmail(commands.Cog):
     async def autoreply_remove(self, ctx, *, name: str.lower):
         """Delete an AI autoreply."""
         autoreplies = self.bot.config["autoreplies"]
-        if name not in autoreplies:
+        key = self._find_autoreply_key(autoreplies, name)
+        if key is None:
             return await ctx.send(
                 embed=create_not_found_embed(name, autoreplies.keys(), "Autoreply")
             )
 
-        autoreplies.pop(name)
+        autoreplies.pop(key)
         await self.bot.config.update()
         await ctx.send(
             embed=discord.Embed(
                 title="Removed AI autoreply",
-                description=f"`{name}` will no longer be selected.",
+                description=f"`{key}` will no longer be selected.",
                 color=self.bot.main_color,
             )
         )
