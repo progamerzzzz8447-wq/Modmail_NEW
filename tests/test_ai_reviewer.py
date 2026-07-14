@@ -10,6 +10,7 @@ from core.ai_reviewer import (
     GeminiHelpfulReplyGenerator,
     build_ticket_text,
     describe_ai_error,
+    finalize_generated_ai_reply,
     generate_ai_message_joint_id,
     has_application_trigger,
     has_configured_trigger,
@@ -53,6 +54,16 @@ def generate_content_output(value):
 
 
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
+    def test_confirmed_ai_reply_omits_standard_closing(self):
+        self.assertEqual(
+            finalize_generated_ai_reply("Helpful answer", include_closing=False),
+            "Helpful answer",
+        )
+        self.assertEqual(
+            finalize_generated_ai_reply("Helpful answer"),
+            "Helpful answer\n\nCan I help with anything else?",
+        )
+
     def test_ai_error_description_includes_missing_name(self):
         error = NameError("name 'example_name' is not defined")
 

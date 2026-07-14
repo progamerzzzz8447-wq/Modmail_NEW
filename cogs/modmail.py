@@ -22,6 +22,7 @@ from core.ai_reviewer import (
     GeminiAnnoyReplyGenerator,
     GeminiHelpfulReplyGenerator,
     NO_MATCH,
+    finalize_generated_ai_reply,
 )
 from core.models import DMDisabled, PermissionLevel, SimilarCategoryConverter, getLogger
 from core.paginator import EmbedPaginatorSession
@@ -1775,6 +1776,7 @@ class Modmail(commands.Cog):
         log_name: str,
         tone_label: str,
         staff_only: bool = False,
+        include_closing: bool = True,
     ):
         """Generate, deliver, and audit a manual AI reply from the full thread history."""
         api_key = self.bot.config.get("gemini_api_key", convert=False)
@@ -1830,12 +1832,13 @@ class Modmail(commands.Cog):
         async with safe_typing(ctx):
             response = await generator.generate(transcript)
             if response is not None:
-                closing = "Can I help with anything else?"
                 # Leave extra room in raw mode for its disclosure and code-block wrapper.
                 maximum_response_length = 3_850 if staff_only else 4_000
-                maximum_generated_length = maximum_response_length - len(closing) - 2
-                response = response[:maximum_generated_length].rstrip()
-                response = f"{response}\n\n{closing}"
+                response = finalize_generated_ai_reply(
+                    response,
+                    include_closing=include_closing,
+                    maximum_length=maximum_response_length,
+                )
                 try:
                     if staff_only:
                         raw_text = f"{response}\n\n{AI_REPLY_FOOTER}"
@@ -1907,16 +1910,26 @@ class Modmail(commands.Cog):
     @checks.thread_only()
     async def aireply(self, ctx, mode: str = None):
         """Generate and send a helpful AI response using the complete thread history."""
-        if mode is not None and mode.casefold() != "raw":
-            raise commands.BadArgument(f"Use `{self.bot.prefix}aireply` or `{self.bot.prefix}aireply raw`.")
-        staff_only = mode is not None
+        normalized_mode = mode.casefold() if mode is not None else None
+        if normalized_mode not in {None, "raw", "confirm"}:
+            raise commands.BadArgument(
+                f"Use `{self.bot.prefix}aireply`, `{self.bot.prefix}aireply raw`, "
+                f"or `{self.bot.prefix}aireply CONFIRM`."
+            )
+        staff_only = normalized_mode == "raw"
+        confirmed_without_closing = normalized_mode == "confirm"
         await self._send_generated_ai_reply(
             ctx,
             GeminiHelpfulReplyGenerator,
-            command_name="aireply raw" if staff_only else "aireply",
+            command_name=(
+                "aireply raw"
+                if staff_only
+                else "aireply CONFIRM" if confirmed_without_closing else "aireply"
+            ),
             log_name="Manual helpful AI reply",
             tone_label="helpful",
             staff_only=staff_only,
+            include_closing=not confirmed_without_closing,
         )
 
     @commands.command()

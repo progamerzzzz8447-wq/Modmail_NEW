@@ -21,6 +21,19 @@ AI_REVIEW_MESSAGE_LIMIT = None
 AI_REPLY_FOOTER = (
     "This reply is AI generated. If you require further assistance, please reply to this message"
 )
+AI_REPLY_CLOSING = "Can I help with anything else?"
+
+
+def finalize_generated_ai_reply(
+    response: str,
+    *,
+    include_closing: bool = True,
+    maximum_length: int = 4_000,
+) -> str:
+    """Fit a generated reply to Discord and optionally append the standard closing."""
+    suffix = f"\n\n{AI_REPLY_CLOSING}" if include_closing else ""
+    available = max(maximum_length - len(suffix), 0)
+    return response[:available].rstrip() + suffix
 
 
 def generate_ai_message_joint_id() -> int:
