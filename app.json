@@ -31,6 +31,10 @@
             "description": "A github personal access token with the repo scope.",
             "required": false
         },
+        "GEMINI_API_KEY": {
+            "description": "Gemini API auth key used to classify new tickets for configured autoreplies.",
+            "required": false
+        },
         "REGISTRY_PLUGINS_ONLY": {
             "description": "If set to true, only plugins that are in the registry can be loaded.",
             "required": false

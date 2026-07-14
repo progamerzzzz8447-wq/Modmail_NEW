@@ -16,6 +16,7 @@ from discord.utils import escape_markdown
 from dateutil import parser
 
 from core import checks
+from core.ai_reviewer import NO_MATCH
 from core.models import DMDisabled, PermissionLevel, SimilarCategoryConverter, getLogger
 from core.paginator import EmbedPaginatorSession
 from core.thread import Thread
@@ -32,6 +33,94 @@ class Modmail(commands.Cog):
         self.bot = bot
         self._snoozed_cache = []
         self._auto_unsnooze_task = self.bot.loop.create_task(self.auto_unsnooze_task())
+
+    @commands.Cog.listener()
+    async def on_thread_reply(self, thread, from_mod, message, anonymous, plain):
+        """Track unanswered recipient follow-ups and cancel them on a staff reply."""
+        key = str(thread.id)
+        reminders = self.bot.config["reply_reminders"]
+
+        if from_mod:
+            if reminders.pop(key, None) is not None:
+                await self.bot.config.update()
+            return
+
+        # The opening ticket message has its own normal notification flow. The
+        # 12-hour reminder begins only when the recipient subsequently replies.
+        if getattr(thread, "_initial_message_id", None) == getattr(message, "id", None):
+            return
+
+        try:
+            delay = int(self.bot.config.get("recipient_reply_reminder_delay") or 43_200)
+        except (TypeError, ValueError):
+            delay = 43_200
+        delay = max(delay, 1)
+        reminders[key] = {
+            "due_at": (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(),
+            "message_id": str(getattr(message, "id", "")),
+        }
+        await self.bot.config.update()
+
+    @tasks.loop(minutes=1)
+    async def unanswered_reply_reminders(self):
+        """Ping a ticket's subscribers once when a recipient follow-up waits 12 hours."""
+        now = datetime.now(timezone.utc)
+        reminders = self.bot.config["reply_reminders"]
+        changed = False
+
+        for recipient_id, reminder in tuple(reminders.items()):
+            try:
+                due_at = datetime.fromisoformat(reminder["due_at"])
+                if due_at.tzinfo is None:
+                    due_at = due_at.replace(tzinfo=timezone.utc)
+            except (KeyError, TypeError, ValueError):
+                reminders.pop(recipient_id, None)
+                changed = True
+                continue
+
+            if due_at > now:
+                continue
+
+            try:
+                thread = await self.bot.threads.find(recipient_id=int(recipient_id))
+            except Exception:
+                logger.warning("Failed to resolve thread %s for its reply reminder.", recipient_id)
+                continue
+
+            # A newer recipient message or staff response may have updated the
+            # reminder while thread lookup yielded control.
+            if reminders.get(recipient_id) != reminder:
+                continue
+
+            if thread is None or thread.channel is None:
+                reminders.pop(recipient_id, None)
+                changed = True
+                continue
+
+            subscribers = self.bot.config["subscriptions"].get(recipient_id, [])
+            mentions = " ".join(dict.fromkeys(subscribers))
+            if not mentions:
+                reminders.pop(recipient_id, None)
+                changed = True
+                continue
+
+            reminder_text = self.bot.config.get("recipient_reply_reminder_text")
+            try:
+                await thread.channel.send(f"{mentions} {reminder_text}")
+            except Exception:
+                logger.warning("Failed to send reply reminder for thread %s.", recipient_id, exc_info=True)
+                continue
+
+            if reminders.get(recipient_id) == reminder:
+                reminders.pop(recipient_id, None)
+                changed = True
+
+        if changed:
+            await self.bot.config.update()
+
+    @unanswered_reply_reminders.before_loop
+    async def before_unanswered_reply_reminders(self):
+        await self.bot.wait_until_ready()
 
     async def auto_unsnooze_task(self):
         await self.bot.wait_until_ready()
@@ -479,6 +568,96 @@ class Modmail(commands.Cog):
         else:
             embed = create_not_found_embed(name, self.bot.snippets.keys(), "Snippet")
         await ctx.send(embed=embed)
+
+    @commands.group(aliases=["autoreplies"], invoke_without_command=True)
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def autoreply(self, ctx, *, name: str.lower = None):
+        """
+        Manage the set messages Gemini may select for a new ticket.
+
+        Create or update one with:
+        - `{prefix}autoreply set apply Your application instructions here.`
+        """
+        autoreplies = self.bot.config["autoreplies"]
+        if name is not None:
+            if name not in autoreplies:
+                embed = create_not_found_embed(name, autoreplies.keys(), "Autoreply")
+            else:
+                embed = discord.Embed(
+                    title=f'Autoreply - "{name}"',
+                    description=autoreplies[name],
+                    color=self.bot.main_color,
+                )
+            return await ctx.send(embed=embed)
+
+        if not autoreplies:
+            return await ctx.send(
+                embed=discord.Embed(
+                    color=self.bot.error_color,
+                    description=(
+                        "No AI autoreplies are configured. Add one with "
+                        f"`{self.bot.prefix}autoreply set <name> <message>`."
+                    ),
+                )
+            )
+
+        embeds = [
+            discord.Embed(title="AI autoreplies", color=self.bot.main_color)
+            for _ in range((len(autoreplies) - 1) // 10 + 1)
+        ]
+        for index, (reply_name, value) in enumerate(sorted(autoreplies.items())):
+            embeds[index // 10].add_field(
+                name=reply_name,
+                value=return_or_truncate(value, 350),
+                inline=False,
+            )
+        return await EmbedPaginatorSession(ctx, *embeds).run()
+
+    @autoreply.command(name="set", aliases=["add", "edit", "create"])
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def autoreply_set(self, ctx, name: str.lower, *, value: commands.clean_content):
+        """Create or update an AI-selectable set message."""
+        autoreplies = self.bot.config["autoreplies"]
+        if name.upper() == NO_MATCH:
+            raise commands.BadArgument("That autoreply name is reserved.")
+        if len(name) > 100:
+            raise commands.BadArgument("Autoreply names cannot be longer than 100 characters.")
+        if len(value) > 4_000:
+            raise commands.BadArgument("Autoreply messages cannot be longer than 4,000 characters.")
+        if name not in autoreplies and len(autoreplies) >= 25:
+            raise commands.BadArgument("You can configure up to 25 AI autoreplies.")
+
+        existed = name in autoreplies
+        autoreplies[name] = value
+        await self.bot.config.update()
+        action = "Updated" if existed else "Created"
+        await ctx.send(
+            embed=discord.Embed(
+                title=f"{action} AI autoreply",
+                description=f"`{name}` is ready for Gemini to select on new tickets.",
+                color=self.bot.main_color,
+            )
+        )
+
+    @autoreply.command(name="remove", aliases=["delete", "del"])
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def autoreply_remove(self, ctx, *, name: str.lower):
+        """Delete an AI autoreply."""
+        autoreplies = self.bot.config["autoreplies"]
+        if name not in autoreplies:
+            return await ctx.send(
+                embed=create_not_found_embed(name, autoreplies.keys(), "Autoreply")
+            )
+
+        autoreplies.pop(name)
+        await self.bot.config.update()
+        await ctx.send(
+            embed=discord.Embed(
+                title="Removed AI autoreply",
+                description=f"`{name}` will no longer be selected.",
+                color=self.bot.main_color,
+            )
+        )
 
     @commands.command(usage="<category> [options]")
     @checks.has_permissions(PermissionLevel.MODERATOR)
@@ -2695,6 +2874,12 @@ class Modmail(commands.Cog):
 
     async def cog_load(self):
         self.snooze_auto_unsnooze.start()
+        self.unanswered_reply_reminders.start()
+
+    def cog_unload(self):
+        self.snooze_auto_unsnooze.cancel()
+        self.unanswered_reply_reminders.cancel()
+        self._auto_unsnooze_task.cancel()
 
     @tasks.loop(seconds=10)
     async def snooze_auto_unsnooze(self):

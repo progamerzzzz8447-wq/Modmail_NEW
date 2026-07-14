@@ -40,6 +40,14 @@ class ConfigManager:
         "reply_without_command": False,
         "anon_reply_without_command": False,
         "plain_reply_without_command": False,
+        # AI autoreplies
+        "gemini_ai_enabled": True,
+        "gemini_model": "gemini-3.5-flash",
+        # recipient reply reminders
+        "recipient_reply_reminder_delay": 43_200,
+        "recipient_reply_reminder_text": (
+            "The recipient is still awaiting a staff response. Please reply to this ticket."
+        ),
         # logging
         "log_channel_id": None,
         "mention_channel_id": None,
@@ -184,6 +192,8 @@ class ConfigManager:
         "snippets": {},
         "notification_squad": {},
         "subscriptions": {},
+        "autoreplies": {},
+        "reply_reminders": {},
         "closures": {},
         # Thread creation menu
         "thread_creation_menu_enabled": False,
@@ -213,6 +223,8 @@ class ConfigManager:
         "enable_eval": True,
         # github access token for private repositories
         "github_token": None,
+        # Gemini API credentials must only be supplied via the environment.
+        "gemini_api_key": None,
         "disable_autoupdates": False,
         "disable_updates": False,
         # Logging
@@ -240,7 +252,7 @@ class ConfigManager:
         "log_expiration",
     }
 
-    duration_seconds = {"snooze_default_duration"}
+    duration_seconds = {"snooze_default_duration", "recipient_reply_reminder_delay"}
 
     booleans = {
         "use_user_id_channel_name",
@@ -291,6 +303,7 @@ class ConfigManager:
         "thread_creation_menu_selection_log",
         "thread_creation_menu_precreate_channel",
         "thread_creation_menu_embed_large_image",
+        "gemini_ai_enabled",
     }
 
     enums = {

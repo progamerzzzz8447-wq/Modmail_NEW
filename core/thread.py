@@ -19,6 +19,7 @@ from discord.ext.commands import MissingRequiredArgument, CommandError
 from lottie.importers import importers as l_importers
 from lottie.exporters import exporters as l_exporters
 
+from core.ai_reviewer import AI_REPLY_FOOTER, GeminiAutoReplyReviewer, build_ticket_text
 from core.models import DMDisabled, DummyMessage, PermissionLevel, getLogger
 from core.ticket_opened_v2 import send_ticket_opened
 from core import checks
@@ -71,6 +72,8 @@ class Thread:
         self._cancelled = False
         self._dm_menu_msg_id = None
         self._dm_menu_channel_id = None
+        self._initial_message_id = None
+        self._ai_review_completed = False
         # --- SNOOZE STATE ---
         self.snoozed = False  # True if thread is snoozed
         self.snooze_data = None  # Dict with channel/category/position/messages for restoration
@@ -788,8 +791,74 @@ class Thread:
 
         return self._genesis_message
 
+    async def _send_ai_autoreply(self, name: str, response_text: str) -> None:
+        """Deliver a configured AI-selected reply and preserve it in the ticket log."""
+        embed = discord.Embed(description=response_text, color=self.bot.mod_color)
+        embed.set_footer(text=AI_REPLY_FOOTER)
+        await self.recipient.send(embed=embed)
+
+        try:
+            staff_message = await self.channel.send(embed=embed)
+        except Exception:
+            logger.warning(
+                "AI autoreply was sent to the recipient but not copied to the thread.",
+                exc_info=True,
+            )
+            return
+
+        log_message = SimpleNamespace(
+            id=staff_message.id,
+            channel=self.channel,
+            created_at=staff_message.created_at,
+            author=self.bot.user,
+            content=f"[AI autoreply: {name}]\n{response_text}\n\n{AI_REPLY_FOOTER}",
+            attachments=[],
+        )
+        try:
+            await self.bot.api.append_log(
+                log_message,
+                message_id=staff_message.id,
+                channel_id=self.channel.id,
+                type_="thread_message",
+            )
+        except Exception:
+            logger.warning("Failed to append an AI autoreply to the ticket log.", exc_info=True)
+
+    async def _review_initial_message(self, initial_message) -> None:
+        """Run Gemini once for a new user-created ticket, failing open on every error."""
+        if self._ai_review_completed:
+            return
+        self._ai_review_completed = True
+
+        if initial_message is None or not self.bot.config.get("gemini_ai_enabled"):
+            return
+
+        autoreplies = self.bot.config.get("autoreplies") or {}
+        api_key = self.bot.config.get("gemini_api_key", convert=False)
+        if not autoreplies or not api_key or self.bot.session is None:
+            return
+
+        ticket_text = build_ticket_text(initial_message)
+        try:
+            forwarded_text = extract_forwarded_content(initial_message)
+        except Exception:
+            forwarded_text = None
+        if forwarded_text:
+            ticket_text = forwarded_text[:12_000]
+
+        reviewer = GeminiAutoReplyReviewer(
+            self.bot.session,
+            str(api_key),
+            model=str(self.bot.config.get("gemini_model") or "gemini-3.5-flash"),
+        )
+        selected = await reviewer.classify(ticket_text, autoreplies)
+        if selected is not None:
+            await self._send_ai_autoreply(selected, autoreplies[selected])
+
     async def setup(self, *, creator=None, category=None, initial_message=None):
         """Create the thread channel and other io related initialisation tasks"""
+        if initial_message is not None:
+            self._initial_message_id = getattr(initial_message, "id", None)
         self.bot.dispatch("thread_initiate", self, creator, category, initial_message)
         recipient = self.recipient
 
@@ -865,8 +934,20 @@ class Thread:
                 logger.error("Failed unexpectedly:", exc_info=True)
 
         async def send_recipient_genesis_message():
-            # Once thread is ready, tell the recipient (don't send if using contact on others)
-            # Allow disabling the DM receipt embed via config
+            user_created = creator is None or creator == recipient
+            if user_created:
+                await recipient.create_dm()
+                try:
+                    await self._review_initial_message(initial_message)
+                except Exception:
+                    # Gemini and AI delivery must never block the standard opened message.
+                    logger.warning(
+                        "AI ticket review failed; continuing with the standard ticket-opened message.",
+                        exc_info=True,
+                    )
+
+            # Once the AI review has completed, send the normal ticket-opened message.
+            # Allow disabling the DM receipt embed via config.
             if not self.bot.config.get("thread_creation_send_dm_embed"):
                 # If self-closable is enabled, add the close reaction to the user's
                 # original message instead so functionality is preserved without an embed.
@@ -882,8 +963,7 @@ class Thread:
 
             recipient_thread_close = self.bot.config.get("recipient_thread_close")
 
-            if creator is None or creator == recipient:
-                await recipient.create_dm()
+            if user_created:
                 msg = await send_ticket_opened(recipient)
 
                 if recipient_thread_close and msg is not None:
@@ -1080,8 +1160,11 @@ class Thread:
 
         # Cancel auto closing the thread if closed by any means.
 
-        self.bot.config["subscriptions"].pop(str(self.id), None)
-        self.bot.config["notification_squad"].pop(str(self.id), None)
+        subscriptions_removed = self.bot.config["subscriptions"].pop(str(self.id), None)
+        notifications_removed = self.bot.config["notification_squad"].pop(str(self.id), None)
+        reminder_removed = self.bot.config["reply_reminders"].pop(str(self.id), None)
+        if any(item is not None for item in (subscriptions_removed, notifications_removed, reminder_removed)):
+            await self.bot.config.update()
 
         # Logging
         if self.channel:
