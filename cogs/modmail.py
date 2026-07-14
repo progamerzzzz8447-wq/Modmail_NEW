@@ -594,7 +594,7 @@ class Modmail(commands.Cog):
           `["MUST MENTION TO CHECK": apply, application, become, staff] apply`
 
         The final value is an existing reply/freply alias. Quoted multiline aliases
-        and multiple reply steps separated by `&&` are supported.
+        and all additional alias commands separated by `&&` execute in order.
         """
         autoreplies = self.bot.config["autoreplies"]
         if name is not None:

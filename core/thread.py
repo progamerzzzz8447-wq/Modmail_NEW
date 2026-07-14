@@ -17,6 +17,7 @@ import isodate
 import discord
 from discord.ext import commands
 from discord.ext.commands import MissingRequiredArgument, CommandError
+from discord.ext.commands.view import StringView
 from lottie.importers import importers as l_importers
 from lottie.exporters import exporters as l_exporters
 
@@ -28,7 +29,12 @@ from core.ai_reviewer import (
     has_application_trigger,
     has_configured_trigger,
 )
-from core.alias_parser import FORMATTED_AI_REPLY_COMMANDS, parse_reply_alias
+from core.alias_parser import (
+    FORMATTED_AI_REPLY_COMMANDS,
+    SAFE_AI_REPLY_COMMANDS,
+    parse_alias,
+    parse_reply_alias,
+)
 from core.models import DMDisabled, DummyMessage, PermissionLevel, getLogger
 from core.ticket_opened_v2 import send_ticket_opened
 from core import checks
@@ -967,9 +973,12 @@ class Thread:
 
     def _resolve_ai_autoreplies(
         self, ticket_text: str
-    ) -> typing.Tuple[typing.Dict[str, str], typing.List[str]]:
+    ) -> typing.Tuple[
+        typing.Dict[str, str], typing.Dict[str, typing.Dict[str, typing.Any]], typing.List[str]
+    ]:
         """Resolve only rules whose required trigger matched the recipient message."""
         choices = {}
+        alias_actions = {}
         errors = []
         aliases = getattr(self.bot, "aliases", {}) or {}
 
@@ -1019,8 +1028,55 @@ class Thread:
                 errors.append(f'Autoreply display name "{display_name}" is duplicated.')
                 continue
             choices[display_name] = combined_message
+            alias_actions[display_name] = {
+                "alias": alias_name,
+                "steps": parse_alias(raw_alias),
+            }
 
-        return choices, errors
+        return choices, alias_actions, errors
+
+    async def _invoke_ai_alias_step(self, step: str, source_message) -> None:
+        """Invoke one configured non-reply alias step as a system-authored command."""
+        view = StringView(self.bot.prefix + step)
+        synthetic = DummyMessage(copy.copy(source_message))
+        synthetic.author = self.bot.modmail_guild.me or self.bot.user
+        synthetic.channel = self.channel
+        synthetic.guild = self.channel.guild
+        synthetic.content = self.bot.prefix + step
+        setattr(synthetic, "_ai_autoreply", True)
+
+        ctx = commands.Context(
+            prefix=self.bot.prefix,
+            view=view,
+            bot=self.bot,
+            message=synthetic,
+        )
+        ctx.thread = self
+        discord.utils.find(view.skip_string, await self.bot.get_prefix())
+        ctx.invoked_with = view.get_word().lower()
+        ctx.command = self.bot.all_commands.get(ctx.invoked_with)
+        setattr(ctx, "_ai_autoreply", True)
+        if ctx.command is None:
+            raise commands.CommandNotFound(f'Alias step command "{ctx.invoked_with}" was not found.')
+        await self.bot.invoke(ctx)
+
+    async def _execute_ai_alias(self, display_name: str, alias_action, source_message) -> None:
+        """Execute every alias step in order while preserving the AI footer on replies."""
+        for step in alias_action["steps"]:
+            parts = step.strip().split(maxsplit=1)
+            command = parts[0].casefold() if parts else ""
+            if command in SAFE_AI_REPLY_COMMANDS and len(parts) == 2 and parts[1].strip():
+                response_text = parts[1].strip()
+                if command in FORMATTED_AI_REPLY_COMMANDS:
+                    response_text = self.bot.formatter.format(
+                        response_text,
+                        channel=self.channel,
+                        recipient=self.recipient,
+                        author=self.bot.user,
+                    )
+                await self._send_ai_autoreply(display_name, response_text)
+                continue
+            await self._invoke_ai_alias_step(step, source_message)
 
     async def _run_ai_review(self, message, ticket_text: str) -> None:
         """Run Gemini for one qualifying recipient message, failing open on every error."""
@@ -1031,7 +1087,7 @@ class Thread:
             if is_initial_message
             else "No AI reply sent; the existing ticket continued normally."
         )
-        autoreplies, configuration_errors = self._resolve_ai_autoreplies(ticket_text)
+        autoreplies, alias_actions, configuration_errors = self._resolve_ai_autoreplies(ticket_text)
         api_key = self.bot.config.get("gemini_api_key", convert=False)
         if not autoreplies:
             await self._log_ai_check(
@@ -1066,12 +1122,21 @@ class Thread:
         delivery_error = None
         if selected is not None:
             try:
-                await self._send_ai_autoreply(selected, response_text)
-                delivery_status = (
-                    "AI autoreply delivered before the normal ticket-opened message."
-                    if is_initial_message
-                    else "AI autoreply delivered after a recipient follow-up."
-                )
+                alias_action = alias_actions.get(selected)
+                if alias_action is None:
+                    await self._send_ai_autoreply(selected, response_text)
+                else:
+                    await self._execute_ai_alias(selected, alias_action, message)
+                if alias_action is not None:
+                    delivery_status = f'AI alias `{alias_action["alias"]}` executed in full.'
+                    if is_initial_message:
+                        delivery_status += " This occurred before the normal ticket-opened message."
+                elif is_initial_message:
+                    delivery_status = (
+                        "AI autoreply delivered before the normal ticket-opened message."
+                    )
+                else:
+                    delivery_status = "AI autoreply delivered after a recipient follow-up."
             except Exception as exc:
                 delivery_error = exc
                 delivery_status = f"AI autoreply delivery failed ({type(exc).__name__})."
