@@ -1,6 +1,7 @@
 import unittest
 
 from core.alias_parser import (
+    DeferredDeleteMessage,
     normalize_alias,
     parse_alias,
     parse_autoreply_rule_spec,
@@ -56,6 +57,50 @@ class AliasParserTests(unittest.TestCase):
                 "NAME: Apply",
                 '["MUST MENTION TO CHECK": ] apply',
             )
+
+
+class DeferredDeleteMessageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_defers_delete_and_delegates_other_message_operations(self):
+        class Message:
+            marker = "real-message"
+
+            def __init__(self):
+                self.deleted_with = "not-deleted"
+                self.reactions = []
+
+            async def delete(self, *, delay=None):
+                self.deleted_with = delay
+
+            async def add_reaction(self, emoji):
+                self.reactions.append(emoji)
+
+        message = Message()
+        deferred = DeferredDeleteMessage(message)
+
+        self.assertEqual(deferred.marker, "real-message")
+        await deferred.add_reaction("check")
+        await deferred.delete(delay=5)
+        self.assertEqual(message.deleted_with, "not-deleted")
+        await deferred.finalize_delete()
+
+        self.assertEqual(message.reactions, ["check"])
+        self.assertEqual(message.deleted_with, 5)
+
+    async def test_immediate_delete_takes_precedence_over_delayed_delete(self):
+        class Message:
+            def __init__(self):
+                self.deleted_with = "not-deleted"
+
+            async def delete(self, *, delay=None):
+                self.deleted_with = delay
+
+        message = Message()
+        deferred = DeferredDeleteMessage(message)
+        await deferred.delete()
+        await deferred.delete(delay=10)
+        await deferred.finalize_delete()
+
+        self.assertIsNone(message.deleted_with)
 
 
 if __name__ == "__main__":

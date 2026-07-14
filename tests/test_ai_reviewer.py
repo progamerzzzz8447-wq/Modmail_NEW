@@ -7,6 +7,7 @@ from core.ai_reviewer import (
     ApplicationReviewWindow,
     GeminiAnnoyReplyGenerator,
     GeminiAutoReplyReviewer,
+    GeminiHelpfulReplyGenerator,
     build_ticket_text,
     has_application_trigger,
     has_configured_trigger,
@@ -71,6 +72,25 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         config = request["json"]["generationConfig"]
         self.assertEqual(config["maxOutputTokens"], 512)
         self.assertEqual(config["responseSchema"]["required"], ["reply"])
+
+    async def test_generates_helpful_reply_from_the_ticket_transcript(self):
+        session = FakeSession(
+            FakeResponse(
+                200,
+                generate_content_output({"reply": "Please send the booking reference."}),
+            )
+        )
+        generator = GeminiHelpfulReplyGenerator(session, "test-key")
+
+        reply = await generator.generate("[time] Recipient\nMy booking is missing.")
+
+        self.assertEqual(reply, "Please send the booking reference.")
+        self.assertEqual(generator.last_outcome, "generated")
+        _, request = session.request
+        prompt = request["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("helpful, clear, warm, and practical", prompt)
+        self.assertIn("My booking is missing.", prompt)
+        self.assertIn("Can I help with anything else?", prompt)
 
     async def test_returns_only_a_configured_match(self):
         session = FakeSession(

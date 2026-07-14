@@ -33,6 +33,7 @@ except ImportError:
     pass
 
 from core import checks
+from core.alias_parser import DeferredDeleteMessage
 from core.changelog import Changelog
 from core.clients import ApiClient, MongoDBClient, PluginDatabaseClient
 from core.config import ConfigManager
@@ -1297,6 +1298,7 @@ class ModmailBot(commands.Bot):
                 logger.warning("Alias %s is invalid, removing.", invoker)
                 self.aliases.pop(invoker)
 
+            context_message = DeferredDeleteMessage(message) if len(aliases) > 1 else message
             for alias in aliases:
                 command = None
                 try:
@@ -1307,7 +1309,7 @@ class ModmailBot(commands.Bot):
                     command = self._get_snippet_command()
                     command_invocation_text = f"{invoked_prefix}{command} {snippet_text}"
                 view = StringView(invoked_prefix + command_invocation_text)
-                ctx_ = cls(prefix=self.prefix, view=view, bot=self, message=message)
+                ctx_ = cls(prefix=self.prefix, view=view, bot=self, message=context_message)
                 ctx_.thread = thread
                 discord.utils.find(view.skip_string, prefixes)
                 ctx_.invoked_with = view.get_word().lower()
@@ -1488,6 +1490,14 @@ class ModmailBot(commands.Bot):
             return await self._queue_dm_message(message)
 
         ctxs = await self.get_contexts(message)
+        deferred_message = next(
+            (
+                ctx.message
+                for ctx in ctxs
+                if isinstance(ctx.message, DeferredDeleteMessage)
+            ),
+            None,
+        )
         for ctx in ctxs:
             if ctx.command:
                 if not any(1 for check in ctx.command.checks if hasattr(check, "permission_level")):
@@ -1553,6 +1563,15 @@ class ModmailBot(commands.Bot):
             elif ctx.invoked_with:
                 exc = commands.CommandNotFound('Command "{}" is not found'.format(ctx.invoked_with))
                 self.dispatch("command_error", ctx, exc)
+
+        if deferred_message is not None:
+            try:
+                await deferred_message.finalize_delete()
+            except discord.NotFound:
+                # Another command or moderator may already have removed it.
+                pass
+            except discord.Forbidden:
+                logger.warning("Could not delete a completed multi-step alias message.")
 
     async def on_typing(self, channel, user, _):
         await self.wait_for_connected()

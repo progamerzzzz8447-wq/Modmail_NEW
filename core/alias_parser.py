@@ -39,6 +39,41 @@ FORMATTED_AI_REPLY_COMMANDS = frozenset(
 )
 
 
+class DeferredDeleteMessage:
+    """Proxy a real message while postponing deletion until alias execution completes.
+
+    Reactions, edits, and other operations are delegated to the real message. This lets
+    later commands in a multi-step alias interact with it after an earlier reply command
+    requested deletion.
+    """
+
+    def __init__(self, message):
+        self._message = message
+        self._delete_requested = False
+        self._delete_delay = None
+
+    def __getattr__(self, name: str):
+        return getattr(self._message, name)
+
+    def __bool__(self):
+        return bool(self._message)
+
+    async def delete(self, *, delay=None):
+        if not self._delete_requested:
+            self._delete_requested = True
+            self._delete_delay = delay
+        elif self._delete_delay is None or delay is None:
+            # An immediate deletion request always takes precedence.
+            self._delete_delay = None
+        else:
+            self._delete_delay = min(self._delete_delay, delay)
+
+    async def finalize_delete(self):
+        if not self._delete_requested:
+            return
+        await self._message.delete(delay=self._delete_delay)
+
+
 def parse_alias(alias: str, *, split: bool = True) -> typing.List[str]:
     """Parse quoted, optionally multi-step aliases while preserving embedded ``&&``."""
 

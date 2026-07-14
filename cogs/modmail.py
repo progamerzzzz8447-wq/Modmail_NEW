@@ -17,7 +17,7 @@ from dateutil import parser
 
 from core import checks
 from core.alias_parser import parse_autoreply_rule_spec, parse_reply_alias
-from core.ai_reviewer import GeminiAnnoyReplyGenerator, NO_MATCH
+from core.ai_reviewer import GeminiAnnoyReplyGenerator, GeminiHelpfulReplyGenerator, NO_MATCH
 from core.models import DMDisabled, PermissionLevel, SimilarCategoryConverter, getLogger
 from core.paginator import EmbedPaginatorSession
 from core.thread import Thread
@@ -1761,11 +1761,16 @@ class Modmail(commands.Cog):
         # Treat the manually sent message as a staff response for reminder bookkeeping.
         self.bot.dispatch("thread_reply", ctx.thread, True, ctx.message, False, False)
 
-    @commands.command()
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
-    @checks.thread_only()
-    async def annoyautoreply(self, ctx):
-        """Generate and send a sarcastic AI response using the complete thread history."""
+    async def _send_generated_ai_reply(
+        self,
+        ctx,
+        generator_cls,
+        *,
+        command_name: str,
+        log_name: str,
+        tone_label: str,
+    ):
+        """Generate, deliver, and audit a manual AI reply from the full thread history."""
         api_key = self.bot.config.get("gemini_api_key", convert=False)
         if not api_key or self.bot.session is None:
             raise commands.CommandError("Gemini API credentials are not configured.")
@@ -1807,7 +1812,7 @@ class Modmail(commands.Cog):
             message_count += 1
 
         transcript = "\n\n---\n\n".join(transcript_blocks)
-        generator = GeminiAnnoyReplyGenerator(
+        generator = generator_cls(
             self.bot.session,
             str(api_key),
             model=str(self.bot.config.get("gemini_model") or "gemini-3.1-flash-lite"),
@@ -1824,7 +1829,7 @@ class Modmail(commands.Cog):
                 response = response[:maximum_generated_length].rstrip()
                 response = f"{response}\n\n{closing}"
                 try:
-                    await ctx.thread._send_ai_autoreply("Manual annoy autoreply", response)
+                    await ctx.thread._send_ai_autoreply(log_name, response)
                 except Exception as exc:
                     delivery_error = exc
 
@@ -1834,7 +1839,7 @@ class Modmail(commands.Cog):
                 transcript,
                 outcome=generator.last_outcome,
                 detail=generator.last_detail or "Gemini did not generate a reply.",
-                selected_name="annoyautoreply",
+                selected_name=command_name,
                 delivery_status="No AI reply was sent.",
             )
             return await ctx.send(
@@ -1853,9 +1858,9 @@ class Modmail(commands.Cog):
                     f"Gemini generated a reply, but Discord delivery failed "
                     f"({type(delivery_error).__name__})."
                 ),
-                selected_name="annoyautoreply",
+                selected_name=command_name,
                 response_text=response,
-                delivery_status="Manual sarcastic AI reply delivery failed.",
+                delivery_status=f"Manual {tone_label} AI reply delivery failed.",
             )
             raise delivery_error
 
@@ -1864,11 +1869,37 @@ class Modmail(commands.Cog):
             transcript,
             outcome=generator.last_outcome,
             detail=f"Generated from {message_count} thread messages.",
-            selected_name="annoyautoreply",
+            selected_name=command_name,
             response_text=response,
-            delivery_status="Manual sarcastic AI reply delivered.",
+            delivery_status=f"Manual {tone_label} AI reply delivered.",
         )
         self.bot.dispatch("thread_reply", ctx.thread, True, ctx.message, False, False)
+
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.thread_only()
+    async def aireply(self, ctx):
+        """Generate and send a helpful AI response using the complete thread history."""
+        await self._send_generated_ai_reply(
+            ctx,
+            GeminiHelpfulReplyGenerator,
+            command_name="aireply",
+            log_name="Manual helpful AI reply",
+            tone_label="helpful",
+        )
+
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.thread_only()
+    async def annoyautoreply(self, ctx):
+        """Generate and send a sarcastic AI response using the complete thread history."""
+        await self._send_generated_ai_reply(
+            ctx,
+            GeminiAnnoyReplyGenerator,
+            command_name="annoyautoreply",
+            log_name="Manual annoy autoreply",
+            tone_label="sarcastic",
+        )
 
     @commands.command(aliases=["formatreply"])
     @checks.has_permissions(PermissionLevel.SUPPORTER)
