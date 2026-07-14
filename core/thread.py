@@ -1223,10 +1223,10 @@ class Thread:
                 if alias_action is not None:
                     delivery_status = f'AI alias `{alias_action["alias"]}` executed in full.'
                     if is_initial_message:
-                        delivery_status += " This occurred before the normal ticket-opened message."
+                        delivery_status += " This occurred after the connected ticket-opened message."
                 elif is_initial_message:
                     delivery_status = (
-                        "AI autoreply delivered before the normal ticket-opened message."
+                        "AI autoreply delivered after the connected ticket-opened message."
                     )
                 else:
                     delivery_status = "AI autoreply delivered after a recipient follow-up."
@@ -1337,17 +1337,20 @@ class Thread:
             user_created = creator is None or creator == recipient
             if user_created:
                 await recipient.create_dm()
+
+            async def run_initial_ai_review():
+                if not user_created:
+                    return
                 try:
                     await self.consider_ai_autoreply(initial_message)
                 except Exception:
-                    # Gemini and AI delivery must never block the standard opened message.
+                    # The connected receipt has already been sent, so AI failure is isolated.
                     logger.warning(
-                        "AI ticket review failed; continuing with the standard ticket-opened message.",
+                        "AI ticket review failed after the connected ticket-opened message.",
                         exc_info=True,
                     )
 
-            # Once the AI review has completed, send the normal ticket-opened message.
-            # Allow disabling the DM receipt embed via config.
+            # Allow disabling the connected DM receipt via config.
             if not self.bot.config.get("thread_creation_send_dm_embed"):
                 # If self-closable is enabled, add the close reaction to the user's
                 # original message instead so functionality is preserved without an embed.
@@ -1359,17 +1362,21 @@ class Thread:
                         await self.bot.add_reaction(initial_message, close_emoji)
                 except Exception as e:
                     logger.info("Failed to add self-close reaction to initial message: %s", e)
+                await run_initial_ai_review()
                 return
 
             recipient_thread_close = self.bot.config.get("recipient_thread_close")
 
             if user_created:
+                # Always await the CONNECTED receipt before any automatic AI response.
                 msg = await send_ticket_opened(recipient)
 
                 if recipient_thread_close and msg is not None:
                     close_emoji = self.bot.config["close_emoji"]
                     close_emoji = await self.bot.convert_emoji(close_emoji)
                     await self.bot.add_reaction(msg, close_emoji)
+
+                await run_initial_ai_review()
 
         async def send_persistent_notes():
             notes = await self.bot.api.find_notes(self.recipient)
