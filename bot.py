@@ -33,7 +33,7 @@ except ImportError:
     pass
 
 from core import checks
-from core.alias_parser import DeferredDeleteMessage
+from core.alias_parser import DeferredDeleteMessage, normalize_compact_fakeautoreply_invocation
 from core.changelog import Changelog
 from core.clients import ApiClient, MongoDBClient, PluginDatabaseClient
 from core.config import ConfigManager
@@ -1279,6 +1279,19 @@ class ModmailBot(commands.Bot):
             return [ctx]
 
         invoker = view.get_word().lower()
+
+        # Be forgiving when staff omit the space in
+        # ``?fakeautoreply Message``. Keep this intentionally command-specific
+        # so prefix matching cannot alter any other command or alias.
+        if self.all_commands.get(invoker) is None:
+            normalized_invocation = normalize_compact_fakeautoreply_invocation(
+                message.content, invoked_prefix
+            )
+            if normalized_invocation is not None:
+                view = StringView(normalized_invocation)
+                discord.utils.find(view.skip_string, prefixes)
+                invoker = view.get_word().lower()
+                ctx.view = view
 
         # Check if a snippet is being called.
         # This needs to be done before checking for aliases since

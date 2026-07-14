@@ -32,6 +32,8 @@ from core.utils import *
 
 logger = getLogger(__name__)
 
+MANUAL_AI_ROLE_IDS = (1391515982417100951, 1516405254571298866)
+
 
 class Modmail(commands.Cog):
     """Commands directly related to Modmail functionality."""
@@ -591,6 +593,7 @@ class Modmail(commands.Cog):
 
     @commands.group(aliases=["autoreplies"], invoke_without_command=True)
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     async def autoreply(self, ctx, *, name: str.lower = None):
         """
         Manage the set messages Gemini may select for a new ticket.
@@ -663,6 +666,7 @@ class Modmail(commands.Cog):
 
     @autoreply.command(name="set", aliases=["add", "edit", "create"])
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     async def autoreply_set(self, ctx, name: str, *, value: commands.clean_content):
         """Create or update an AI-selectable set message."""
         autoreplies = self.bot.config["autoreplies"]
@@ -730,6 +734,7 @@ class Modmail(commands.Cog):
 
     @autoreply.command(name="remove", aliases=["delete", "del"])
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     async def autoreply_remove(self, ctx, *, name: str.lower):
         """Delete an AI autoreply."""
         autoreplies = self.bot.config["autoreplies"]
@@ -1731,6 +1736,7 @@ class Modmail(commands.Cog):
 
     @commands.command(usage="<MESSAGE>")
     @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def fakeautoreply(self, ctx, *, message: str):
         """Send staff-provided text using the AI autoreply presentation."""
@@ -1907,6 +1913,7 @@ class Modmail(commands.Cog):
 
     @commands.command()
     @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def aireply(self, ctx, mode: str = None):
         """Generate and send a helpful AI response using the complete thread history."""
@@ -1934,6 +1941,7 @@ class Modmail(commands.Cog):
 
     @commands.command()
     @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def annoyautoreply(self, ctx):
         """Generate and send a sarcastic AI response using the complete thread history."""

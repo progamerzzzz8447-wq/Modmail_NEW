@@ -3,6 +3,7 @@ import unittest
 from core.alias_parser import (
     DeferredDeleteMessage,
     normalize_alias,
+    normalize_compact_fakeautoreply_invocation,
     parse_alias,
     parse_autoreply_rule_spec,
     parse_reply_alias,
@@ -35,6 +36,22 @@ class AliasParserTests(unittest.TestCase):
 
     def test_normalize_alias_appends_invocation_text(self):
         self.assertEqual(normalize_alias('"freply Hello"', "world"), ["freply Hello world"])
+
+    def test_normalizes_fakeautoreply_without_space(self):
+        self.assertEqual(
+            normalize_compact_fakeautoreply_invocation(
+                "?fakeautoreplyPlease check the gamepass.", "?"
+            ),
+            "?fakeautoreply Please check the gamepass.",
+        )
+
+    def test_does_not_change_normal_or_unrelated_commands(self):
+        self.assertIsNone(
+            normalize_compact_fakeautoreply_invocation("?fakeautoreply Already spaced", "?")
+        )
+        self.assertIsNone(
+            normalize_compact_fakeautoreply_invocation("?replyHello", "?")
+        )
 
     def test_parses_autoreply_rule_syntax(self):
         self.assertEqual(

@@ -39,6 +39,27 @@ FORMATTED_AI_REPLY_COMMANDS = frozenset(
 )
 
 
+def normalize_compact_fakeautoreply_invocation(
+    content: str, invoked_prefix: str
+) -> typing.Optional[str]:
+    """Insert the optional separator after ``fakeautoreply``.
+
+    Discord's command parser normally treats ``?fakeautoreplyPlease`` as a
+    completely different command.  This compatibility shim is deliberately
+    limited to the manual fake-autoreply command so ordinary command names and
+    aliases retain their existing parsing behavior.
+    """
+    command_text = f"{invoked_prefix}fakeautoreply"
+    content = str(content or "")
+    if not content.casefold().startswith(command_text.casefold()):
+        return None
+
+    message = content[len(command_text) :]
+    if not message or message[0].isspace():
+        return None
+    return f"{command_text} {message}"
+
+
 class DeferredDeleteMessage:
     """Proxy a real message while postponing deletion until alias execution completes.
 
