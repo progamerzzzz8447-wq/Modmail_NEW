@@ -36,7 +36,7 @@ class Modmail(commands.Cog):
 
     @commands.Cog.listener()
     async def on_thread_reply(self, thread, from_mod, message, anonymous, plain):
-        """Track unanswered recipient follow-ups and cancel them on a staff reply."""
+        """Track the AI review window and unanswered recipient follow-ups."""
         key = str(thread.id)
         reminders = self.bot.config["reply_reminders"]
 
@@ -44,6 +44,19 @@ class Modmail(commands.Cog):
             if reminders.pop(key, None) is not None:
                 await self.bot.config.update()
             return
+
+        # The opening message is considered during thread setup so a matching
+        # autoreply can still be delivered before the normal opened receipt.
+        # Subsequent recipient messages are considered here until four total
+        # recipient messages have been scanned or Gemini has run once.
+        if getattr(thread, "_initial_message_id", None) != getattr(message, "id", None):
+            try:
+                await thread.consider_ai_autoreply(message)
+            except Exception:
+                logger.warning(
+                    "AI ticket review failed for a recipient follow-up.",
+                    exc_info=True,
+                )
 
         # The opening ticket message has its own normal notification flow. The
         # 12-hour reminder begins only when the recipient subsequently replies.

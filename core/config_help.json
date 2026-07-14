@@ -1,21 +1,22 @@
 {
   "gemini_ai_enabled": {
     "default": "Yes",
-    "description": "Uses Gemini once when a new user-created ticket opens to select a relevant configured `{prefix}autoreply` message. If Gemini is unavailable or no message matches, the normal ticket-opened flow continues.",
+    "description": "Scans the recipient's first four messages for application or recruitment wording, then uses Gemini at most once to select a relevant configured `{prefix}autoreply` message.",
     "examples": [
       "`{prefix}config set gemini_ai_enabled yes`",
       "`{prefix}config set gemini_ai_enabled no`"
     ],
     "notes": [
       "Requires the `GEMINI_API_KEY` environment variable and at least one configured `{prefix}autoreply`.",
-      "Gemini selects an existing set message; it does not compose the reply."
+      "Gemini selects an existing set message; it does not compose the reply.",
+      "If none of the first four recipient messages contain application-related wording, Gemini is not called."
     ]
   },
   "gemini_model": {
-    "default": "`gemini-2.5-flash-lite`",
+    "default": "`gemini-3.1-flash-lite`",
     "description": "The Gemini model used to classify new ticket requests for AI autoreplies.",
     "examples": [
-      "`{prefix}config set gemini_model gemini-2.5-flash-lite`"
+      "`{prefix}config set gemini_model gemini-3.1-flash-lite`"
     ],
     "notes": []
   },

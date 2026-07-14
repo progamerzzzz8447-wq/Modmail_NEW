@@ -1,7 +1,9 @@
 import asyncio
 import json
 import logging
+import re
 import typing
+from urllib.parse import quote
 
 try:
     from core.models import getLogger
@@ -10,11 +12,61 @@ except ImportError:  # Allows isolated unit tests without loading the Discord ru
 else:
     logger = getLogger(__name__)
 
-GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
+GEMINI_GENERATE_CONTENT_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+)
 NO_MATCH = "__NO_MATCH__"
+AI_REVIEW_MESSAGE_LIMIT = 4
 AI_REPLY_FOOTER = (
     "This reply is AI generated. If you require further assistance, please reply to this message"
 )
+
+APPLICATION_TRIGGER_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE | re.DOTALL)
+    for pattern in (
+        r"\bappl(?:y|ies|ied|ying|icant|icants|ication|ications)\b",
+        r"\b(?:aply|aplying|aplly|apllying|aplication|aplications|appication|applicaton)\b",
+        r"\b(?:recruit|recruits|recruited|recruiting|recruitment|recruitments)\b",
+        r"\b(?:hire|hired|hiring|vacancy|vacancies|job|jobs|career|careers)\b",
+        r"\b(?:employment|employ|employed|employee|employees|candidate|candidates)\b",
+        r"\b(?:cv|resume|résumé|interview|interviews|internship|apprenticeship)\b",
+        r"\b(?:application\s+form|submit\s+(?:an?\s+)?application)\b",
+        r"\b(?:join|joining|be|become|work\s+(?:for|with|at|in))\b.{0,40}"
+        r"\b(?:team|staff|crew|company|airline|tui|pilot|cabin\s+crew|ground\s+crew)\b",
+        r"\b(?:team|staff|crew|company|airline|tui|pilot|cabin\s+crew|ground\s+crew)\b"
+        r".{0,40}\b(?:join|joining|become|work\s+(?:for|with|at|in))\b",
+        r"\b(?:sign\s*up|register|registration|enrol|enroll)\b.{0,40}"
+        r"\b(?:job|role|position|staff|crew|application)\b",
+    )
+)
+
+
+def has_application_trigger(text: str) -> bool:
+    """Return whether text contains likely application or recruitment wording."""
+    normalized = " ".join((text or "").casefold().split())
+    return any(pattern.search(normalized) for pattern in APPLICATION_TRIGGER_PATTERNS)
+
+
+class ApplicationReviewWindow:
+    """Track the bounded set of recipient messages eligible for one AI check."""
+
+    def __init__(self, limit: int = AI_REVIEW_MESSAGE_LIMIT):
+        self.limit = max(int(limit), 1)
+        self.messages_seen = 0
+        self.closed = False
+
+    def consider(self, text: str) -> bool:
+        """Return True once for a qualifying message within the configured limit."""
+        if self.closed:
+            return False
+
+        self.messages_seen += 1
+        if has_application_trigger(text):
+            self.closed = True
+            return True
+        if self.messages_seen >= self.limit:
+            self.closed = True
+        return False
 
 
 def build_ticket_text(message, *, max_chars: int = 12_000) -> str:
@@ -35,14 +87,14 @@ def build_ticket_text(message, *, max_chars: int = 12_000) -> str:
 
 
 class GeminiAutoReplyReviewer:
-    """Select a configured autoreply for a new support ticket using Gemini."""
+    """Select a configured autoreply for a support ticket using Gemini."""
 
     def __init__(
         self,
         session: typing.Any,
         api_key: str,
         *,
-        model: str = "gemini-2.5-flash-lite",
+        model: str = "gemini-3.1-flash-lite",
         timeout_seconds: float = 12,
     ):
         self.session = session
@@ -54,6 +106,16 @@ class GeminiAutoReplyReviewer:
 
     @staticmethod
     def _extract_output_text(data: typing.Mapping[str, typing.Any]) -> typing.Optional[str]:
+        for candidate in data.get("candidates") or []:
+            text = "".join(
+                part.get("text", "")
+                for part in ((candidate.get("content") or {}).get("parts") or [])
+                if isinstance(part, dict)
+            ).strip()
+            if text:
+                return text
+
+        # Retain compatibility with responses from the Interactions API.
         for step in reversed(data.get("steps") or []):
             if step.get("type") != "model_output":
                 continue
@@ -99,38 +161,37 @@ class GeminiAutoReplyReviewer:
             "Never write a reply or invent a category.\n\n"
             + json.dumps(review_input, ensure_ascii=False)
         )
-        generation_config = {"max_output_tokens": 256}
-        if not self.model.startswith("gemini-2.5-"):
-            generation_config["thinking_level"] = "minimal"
+        response_schema = {
+            "type": "OBJECT",
+            "properties": {
+                "autoreply_key": {
+                    "type": "STRING",
+                    "enum": [NO_MATCH, *keys],
+                }
+            },
+            "required": ["autoreply_key"],
+        }
+        model = self.model.removeprefix("models/")
+        generation_config = {
+            "maxOutputTokens": 256,
+            "responseMimeType": "application/json",
+            "responseSchema": response_schema,
+        }
+        if model.startswith("gemini-3"):
+            generation_config["thinkingConfig"] = {"thinkingLevel": "minimal"}
 
         payload = {
-            "model": self.model,
-            "store": False,
-            "input": prompt,
-            "generation_config": generation_config,
-            "response_format": {
-                "type": "text",
-                "mime_type": "application/json",
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "autoreply_key": {
-                            "type": "string",
-                            "enum": [NO_MATCH, *keys],
-                        }
-                    },
-                    "required": ["autoreply_key"],
-                    "additionalProperties": False,
-                },
-            },
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": generation_config,
         }
+        request_url = GEMINI_GENERATE_CONTENT_URL.format(model=quote(model, safe="-._"))
 
         data = None
         retryable_statuses = {500, 502, 503, 504}
         for attempt in range(2):
             try:
                 async with self.session.post(
-                    GEMINI_INTERACTIONS_URL,
+                    request_url,
                     json=payload,
                     headers={"x-goog-api-key": self.api_key},
                     timeout=self.timeout,

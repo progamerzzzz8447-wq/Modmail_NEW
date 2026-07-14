@@ -2,7 +2,13 @@ import json
 import unittest
 from types import SimpleNamespace
 
-from core.ai_reviewer import GeminiAutoReplyReviewer, build_ticket_text
+from core.ai_reviewer import (
+    AI_REVIEW_MESSAGE_LIMIT,
+    ApplicationReviewWindow,
+    GeminiAutoReplyReviewer,
+    build_ticket_text,
+    has_application_trigger,
+)
 
 
 class FakeResponse:
@@ -33,14 +39,10 @@ class FakeSession:
         return response
 
 
-def interaction_output(value):
+def generate_content_output(value):
     return {
-        "steps": [
-            {"type": "thought", "signature": "not inspected"},
-            {
-                "type": "model_output",
-                "content": [{"type": "text", "text": json.dumps(value)}],
-            },
+        "candidates": [
+            {"content": {"role": "model", "parts": [{"text": json.dumps(value)}]}}
         ]
     }
 
@@ -48,7 +50,7 @@ def interaction_output(value):
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
     async def test_returns_only_a_configured_match(self):
         session = FakeSession(
-            FakeResponse(200, interaction_output({"autoreply_key": "apply"}))
+            FakeResponse(200, generate_content_output({"autoreply_key": "apply"}))
         )
         reviewer = GeminiAutoReplyReviewer(session, "test-key")
 
@@ -60,31 +62,43 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(selected, "apply")
         self.assertEqual(reviewer.last_outcome, "matched")
         self.assertEqual(reviewer.last_detail, "Selected autoreply: apply.")
-        _, request = session.request
-        self.assertFalse(request["json"]["store"])
-        self.assertEqual(request["json"]["model"], "gemini-2.5-flash-lite")
-        self.assertNotIn("thinking_level", request["json"]["generation_config"])
-        self.assertEqual(request["json"]["generation_config"]["max_output_tokens"], 256)
+        url, request = session.request
+        self.assertEqual(
+            url,
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-3.1-flash-lite:generateContent",
+        )
+        generation_config = request["json"]["generationConfig"]
+        self.assertEqual(generation_config["thinkingConfig"]["thinkingLevel"], "minimal")
+        self.assertEqual(generation_config["maxOutputTokens"], 256)
+        self.assertEqual(generation_config["responseMimeType"], "application/json")
+        self.assertEqual(
+            generation_config["responseSchema"]["properties"]["autoreply_key"]["enum"],
+            ["__NO_MATCH__", "apply", "refund"],
+        )
         self.assertEqual(request["headers"]["x-goog-api-key"], "test-key")
 
-    async def test_newer_flash_lite_uses_minimal_thinking(self):
+    async def test_2_5_flash_lite_omits_unsupported_thinking_level(self):
         session = FakeSession(
-            FakeResponse(200, interaction_output({"autoreply_key": "__NO_MATCH__"}))
+            FakeResponse(200, generate_content_output({"autoreply_key": "__NO_MATCH__"}))
         )
         reviewer = GeminiAutoReplyReviewer(
-            session, "test-key", model="gemini-3.1-flash-lite"
+            session, "test-key", model="models/gemini-2.5-flash-lite"
         )
 
         await reviewer.classify("A question", {"apply": "Apply here."})
 
-        _, request = session.request
+        url, request = session.request
         self.assertEqual(
-            request["json"]["generation_config"]["thinking_level"], "minimal"
+            url,
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-2.5-flash-lite:generateContent",
         )
+        self.assertNotIn("thinkingConfig", request["json"]["generationConfig"])
 
     async def test_no_match_returns_none(self):
         session = FakeSession(
-            FakeResponse(200, interaction_output({"autoreply_key": "__NO_MATCH__"}))
+            FakeResponse(200, generate_content_output({"autoreply_key": "__NO_MATCH__"}))
         )
         reviewer = GeminiAutoReplyReviewer(session, "test-key")
 
@@ -95,12 +109,12 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unknown_or_invalid_output_fails_closed(self):
         unknown_session = FakeSession(
-            FakeResponse(200, interaction_output({"autoreply_key": "invented"}))
+            FakeResponse(200, generate_content_output({"autoreply_key": "invented"}))
         )
         invalid_session = FakeSession(
             FakeResponse(
                 200,
-                {"steps": [{"type": "model_output", "content": [{"type": "text", "text": "?"}]}]},
+                {"candidates": [{"content": {"parts": [{"text": "?"}]}}]},
             )
         )
 
@@ -126,7 +140,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         session = FakeSession(
             [
                 FakeResponse(500, {}),
-                FakeResponse(200, interaction_output({"autoreply_key": "apply"})),
+                FakeResponse(200, generate_content_output({"autoreply_key": "apply"})),
             ]
         )
         reviewer = GeminiAutoReplyReviewer(session, "key")
@@ -148,6 +162,46 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             "Please review this\n\nAttachments: application.pdf",
         )
         self.assertEqual(build_ticket_text(message, max_chars=6), "Please")
+
+    def test_application_trigger_covers_common_wording_and_typos(self):
+        examples = (
+            "Hello! How can I apply?",
+            "Where is the application form?",
+            "I am apllying for cabin crew",
+            "Are you recruiting pilots?",
+            "Do you have any vacancies?",
+            "I want to join the TUI team",
+            "Could I work for the airline?",
+            "I would love to be cabin crew",
+            "Are there any careers or jobs available?",
+            "Where should I send my CV?",
+            "How do I register for a staff position?",
+        )
+
+        for text in examples:
+            with self.subTest(text=text):
+                self.assertTrue(has_application_trigger(text))
+
+        self.assertFalse(has_application_trigger("My apple juice is missing."))
+        self.assertFalse(has_application_trigger("When does flight 123 depart?"))
+        self.assertEqual(AI_REVIEW_MESSAGE_LIMIT, 4)
+
+    def test_application_review_window_checks_once_within_first_four_messages(self):
+        window = ApplicationReviewWindow()
+
+        self.assertFalse(window.consider("Hello"))
+        self.assertFalse(window.consider("I need some help"))
+        self.assertFalse(window.consider("Is anybody there?"))
+        self.assertTrue(window.consider("How can I apply?"))
+        self.assertTrue(window.closed)
+        self.assertEqual(window.messages_seen, 4)
+        self.assertFalse(window.consider("Another application question"))
+
+        expired = ApplicationReviewWindow()
+        for text in ("one", "two", "three", "four"):
+            self.assertFalse(expired.consider(text))
+        self.assertTrue(expired.closed)
+        self.assertFalse(expired.consider("I want a job"))
 
 
 if __name__ == "__main__":

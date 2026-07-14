@@ -19,7 +19,12 @@ from discord.ext.commands import MissingRequiredArgument, CommandError
 from lottie.importers import importers as l_importers
 from lottie.exporters import exporters as l_exporters
 
-from core.ai_reviewer import AI_REPLY_FOOTER, GeminiAutoReplyReviewer, build_ticket_text
+from core.ai_reviewer import (
+    AI_REPLY_FOOTER,
+    ApplicationReviewWindow,
+    GeminiAutoReplyReviewer,
+    build_ticket_text,
+)
 from core.models import DMDisabled, DummyMessage, PermissionLevel, getLogger
 from core.ticket_opened_v2 import send_ticket_opened
 from core import checks
@@ -74,6 +79,8 @@ class Thread:
         self._dm_menu_channel_id = None
         self._initial_message_id = None
         self._ai_review_completed = False
+        self._ai_review_window = ApplicationReviewWindow()
+        self._ai_review_lock = asyncio.Lock()
         # --- SNOOZE STATE ---
         self.snoozed = False  # True if thread is snoozed
         self.snooze_data = None  # Dict with channel/category/position/messages for restoration
@@ -907,48 +914,73 @@ class Thread:
         except Exception:
             logger.warning("Failed to send the Gemini ticket-check audit log.", exc_info=True)
 
-    async def _review_initial_message(self, initial_message) -> None:
-        """Run Gemini once for a new user-created ticket, failing open on every error."""
-        if self._ai_review_completed:
-            return
-        self._ai_review_completed = True
-
-        if initial_message is None or not self.bot.config.get("gemini_ai_enabled"):
-            return
-
-        ticket_text = build_ticket_text(initial_message)
+    @staticmethod
+    def _ai_ticket_text(message) -> str:
+        ticket_text = build_ticket_text(message)
         try:
-            forwarded_text = extract_forwarded_content(initial_message)
+            forwarded_text = extract_forwarded_content(message)
         except Exception:
             forwarded_text = None
         if forwarded_text:
             ticket_text = forwarded_text[:12_000]
+        return ticket_text
 
+    async def consider_ai_autoreply(self, message) -> None:
+        """Review at most once when the first four recipient messages contain a trigger."""
+        if message is None:
+            return
+
+        async with self._ai_review_lock:
+            if self._ai_review_completed:
+                return
+            if not self.bot.config.get("gemini_ai_enabled"):
+                self._ai_review_completed = True
+                return
+
+            ticket_text = self._ai_ticket_text(message)
+            if not self._ai_review_window.consider(ticket_text):
+                self._ai_review_completed = self._ai_review_window.closed
+                return
+
+            # A qualifying message consumes the ticket's single Gemini check,
+            # regardless of the outcome or whether an autoreply matches.
+            self._ai_review_completed = True
+            await self._run_ai_review(message, ticket_text)
+
+    async def _run_ai_review(self, message, ticket_text: str) -> None:
+        """Run Gemini for one qualifying recipient message, failing open on every error."""
+
+        is_initial_message = self._initial_message_id == getattr(message, "id", None)
+        fallback_status = (
+            "No AI reply sent; the normal ticket-opened message was used."
+            if is_initial_message
+            else "No AI reply sent; the existing ticket continued normally."
+        )
         autoreplies = self.bot.config.get("autoreplies") or {}
         api_key = self.bot.config.get("gemini_api_key", convert=False)
         if not autoreplies:
             await self._log_ai_check(
-                initial_message,
+                message,
                 ticket_text,
                 outcome="skipped",
                 detail="No autoreplies are configured.",
-                delivery_status="No AI reply sent; the normal ticket-opened message was used.",
+                delivery_status=fallback_status,
             )
             return
         if not api_key or self.bot.session is None:
             await self._log_ai_check(
-                initial_message,
+                message,
                 ticket_text,
                 outcome="configuration_error",
                 detail="Gemini API credentials or the HTTP session are unavailable.",
-                delivery_status="No AI reply sent; the normal ticket-opened message was used.",
+                delivery_status=fallback_status,
             )
             return
 
         reviewer = GeminiAutoReplyReviewer(
             self.bot.session,
             str(api_key),
-            model=str(self.bot.config.get("gemini_model") or "gemini-2.5-flash-lite"),
+            model=str(self.bot.config.get("gemini_model") or "gemini-3.1-flash-lite"),
         )
         selected = await reviewer.classify(ticket_text, autoreplies)
         response_text = autoreplies.get(selected) if selected is not None else None
@@ -956,15 +988,19 @@ class Thread:
         if selected is not None:
             try:
                 await self._send_ai_autoreply(selected, response_text)
-                delivery_status = "AI autoreply delivered before the normal ticket-opened message."
+                delivery_status = (
+                    "AI autoreply delivered before the normal ticket-opened message."
+                    if is_initial_message
+                    else "AI autoreply delivered after a recipient follow-up."
+                )
             except Exception as exc:
                 delivery_error = exc
                 delivery_status = f"AI autoreply delivery failed ({type(exc).__name__})."
         else:
-            delivery_status = "No AI reply sent; the normal ticket-opened message was used."
+            delivery_status = fallback_status
 
         await self._log_ai_check(
-            initial_message,
+            message,
             ticket_text,
             outcome=reviewer.last_outcome,
             detail=reviewer.last_detail or "",
@@ -1058,7 +1094,7 @@ class Thread:
             if user_created:
                 await recipient.create_dm()
                 try:
-                    await self._review_initial_message(initial_message)
+                    await self.consider_ai_autoreply(initial_message)
                 except Exception:
                     # Gemini and AI delivery must never block the standard opened message.
                     logger.warning(
