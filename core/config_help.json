@@ -19,6 +19,16 @@
     ],
     "notes": []
   },
+  "gemini_log_channel_id": {
+    "default": "`1526602233737773146`",
+    "description": "Discord channel that receives an audit embed for every Gemini ticket check, including the reviewed message, decision, configured reply, and delivery result.",
+    "examples": [
+      "`{prefix}config set gemini_log_channel_id 1526602233737773146`"
+    ],
+    "notes": [
+      "The Gemini API key is never included in audit logs."
+    ]
+  },
   "recipient_reply_reminder_delay": {
     "default": "12 hours",
     "description": "How long a recipient follow-up may remain unanswered before subscribed users are pinged in the ticket.",

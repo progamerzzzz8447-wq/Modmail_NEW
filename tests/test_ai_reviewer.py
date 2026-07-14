@@ -55,6 +55,8 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(selected, "apply")
+        self.assertEqual(reviewer.last_outcome, "matched")
+        self.assertEqual(reviewer.last_detail, "Selected autoreply: apply.")
         _, request = session.request
         self.assertFalse(request["json"]["store"])
         self.assertEqual(request["headers"]["x-goog-api-key"], "test-key")
@@ -68,6 +70,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         selected = await reviewer.classify("Unrelated question", {"apply": "Apply here."})
 
         self.assertIsNone(selected)
+        self.assertEqual(reviewer.last_outcome, "no_match")
 
     async def test_unknown_or_invalid_output_fails_closed(self):
         unknown_session = FakeSession(
@@ -95,6 +98,8 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         reviewer = GeminiAutoReplyReviewer(FakeSession(FakeResponse(429, {})), "key")
 
         self.assertIsNone(await reviewer.classify("How do I apply?", {"apply": "Apply here."}))
+        self.assertEqual(reviewer.last_outcome, "http_error")
+        self.assertEqual(reviewer.last_detail, "Gemini returned HTTP 429.")
 
     def test_build_ticket_text_includes_attachment_names_and_truncates(self):
         message = SimpleNamespace(

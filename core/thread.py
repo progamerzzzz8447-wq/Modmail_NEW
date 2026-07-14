@@ -824,6 +824,86 @@ class Thread:
         except Exception:
             logger.warning("Failed to append an AI autoreply to the ticket log.", exc_info=True)
 
+    async def _log_ai_check(
+        self,
+        initial_message,
+        ticket_text: str,
+        *,
+        outcome: str,
+        detail: str,
+        selected_name: typing.Optional[str] = None,
+        response_text: typing.Optional[str] = None,
+        delivery_status: str = "No AI reply was sent.",
+    ) -> None:
+        """Audit a Gemini check in the configured Discord channel without exposing credentials."""
+        channel_id = self.bot.config.get("gemini_log_channel_id")
+        if not channel_id:
+            return
+
+        try:
+            audit_channel = self.bot.get_channel(int(channel_id))
+            if audit_channel is None:
+                audit_channel = await self.bot.fetch_channel(int(channel_id))
+            if not hasattr(audit_channel, "send"):
+                raise TypeError("Gemini log channel is not messageable.")
+
+            error_outcomes = {
+                "configuration_error",
+                "http_error",
+                "invalid_response",
+                "request_error",
+            }
+            color = self.bot.error_color if outcome in error_outcomes else self.bot.main_color
+            embed = discord.Embed(
+                title="Gemini AI ticket check",
+                color=color,
+                timestamp=discord.utils.utcnow(),
+            )
+            thread_reference = getattr(self.channel, "mention", f"Channel ID: {self.channel.id}")
+            embed.description = (
+                f"**Ticket:** {thread_reference}\n"
+                f"**Recipient:** {self.recipient.mention} (`{self.recipient.id}`)"
+            )
+            embed.add_field(
+                name="Message checked",
+                value=truncate(ticket_text or "[No reviewable text]", 1024),
+                inline=False,
+            )
+
+            outcome_text = outcome.replace("_", " ").title()
+            if selected_name:
+                outcome_text += f" — `{selected_name}`"
+            if detail:
+                outcome_text += f"\n{detail}"
+            embed.add_field(
+                name="Gemini decision",
+                value=truncate(outcome_text, 1024),
+                inline=False,
+            )
+
+            if response_text:
+                reply_log = (
+                    f"{response_text}\n\n"
+                    f"Footer: {AI_REPLY_FOOTER}\n"
+                    f"Delivery: {delivery_status}"
+                )
+            else:
+                reply_log = delivery_status
+            embed.add_field(
+                name="Reply sent to recipient",
+                value=truncate(reply_log, 1024),
+                inline=False,
+            )
+            embed.set_footer(
+                text=(
+                    f"Message ID: {getattr(initial_message, 'id', 'unknown')} • "
+                    f"Model: {self.bot.config.get('gemini_model')}"
+                )
+            )
+            await audit_channel.send(embed=embed)
+        except Exception:
+            logger.warning("Failed to send the Gemini ticket-check audit log.", exc_info=True)
+
     async def _review_initial_message(self, initial_message) -> None:
         """Run Gemini once for a new user-created ticket, failing open on every error."""
         if self._ai_review_completed:
@@ -831,11 +911,6 @@ class Thread:
         self._ai_review_completed = True
 
         if initial_message is None or not self.bot.config.get("gemini_ai_enabled"):
-            return
-
-        autoreplies = self.bot.config.get("autoreplies") or {}
-        api_key = self.bot.config.get("gemini_api_key", convert=False)
-        if not autoreplies or not api_key or self.bot.session is None:
             return
 
         ticket_text = build_ticket_text(initial_message)
@@ -846,14 +921,56 @@ class Thread:
         if forwarded_text:
             ticket_text = forwarded_text[:12_000]
 
+        autoreplies = self.bot.config.get("autoreplies") or {}
+        api_key = self.bot.config.get("gemini_api_key", convert=False)
+        if not autoreplies:
+            await self._log_ai_check(
+                initial_message,
+                ticket_text,
+                outcome="skipped",
+                detail="No autoreplies are configured.",
+                delivery_status="No AI reply sent; the normal ticket-opened message was used.",
+            )
+            return
+        if not api_key or self.bot.session is None:
+            await self._log_ai_check(
+                initial_message,
+                ticket_text,
+                outcome="configuration_error",
+                detail="Gemini API credentials or the HTTP session are unavailable.",
+                delivery_status="No AI reply sent; the normal ticket-opened message was used.",
+            )
+            return
+
         reviewer = GeminiAutoReplyReviewer(
             self.bot.session,
             str(api_key),
             model=str(self.bot.config.get("gemini_model") or "gemini-3.5-flash"),
         )
         selected = await reviewer.classify(ticket_text, autoreplies)
+        response_text = autoreplies.get(selected) if selected is not None else None
+        delivery_error = None
         if selected is not None:
-            await self._send_ai_autoreply(selected, autoreplies[selected])
+            try:
+                await self._send_ai_autoreply(selected, response_text)
+                delivery_status = "AI autoreply delivered before the normal ticket-opened message."
+            except Exception as exc:
+                delivery_error = exc
+                delivery_status = f"AI autoreply delivery failed ({type(exc).__name__})."
+        else:
+            delivery_status = "No AI reply sent; the normal ticket-opened message was used."
+
+        await self._log_ai_check(
+            initial_message,
+            ticket_text,
+            outcome=reviewer.last_outcome,
+            detail=reviewer.last_detail or "",
+            selected_name=selected,
+            response_text=response_text,
+            delivery_status=delivery_status,
+        )
+        if delivery_error is not None:
+            raise delivery_error
 
     async def setup(self, *, creator=None, category=None, initial_message=None):
         """Create the thread channel and other io related initialisation tasks"""
@@ -1549,7 +1666,14 @@ class Thread:
             tasks += [self.bot.api.delete_note(message1.id)]
 
         if tasks:
-            await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            unexpected_errors = [
+                result
+                for result in results
+                if isinstance(result, Exception) and not isinstance(result, discord.NotFound)
+            ]
+            if unexpected_errors:
+                raise unexpected_errors[0]
 
     async def find_linked_message_from_dm(
         self, message, either_direction=False, get_thread_channel=False
