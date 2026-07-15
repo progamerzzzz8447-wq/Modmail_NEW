@@ -24,6 +24,16 @@ AI_REPLY_FOOTER = (
 AI_REPLY_CLOSING = "Can I help with anything else?"
 
 
+def normalize_generated_reply_layout(response: str) -> str:
+    """Convert model-provided newline escapes into Discord line breaks."""
+    response = str(response or "")
+    # Structured JSON normally decodes ``\n`` for us, but models sometimes
+    # return the two literal characters instead. Support both forms.
+    response = response.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
+    response = response.replace("\r\n", "\n").replace("\r", "\n")
+    return response.strip()
+
+
 def finalize_generated_ai_reply(
     response: str,
     *,
@@ -31,6 +41,7 @@ def finalize_generated_ai_reply(
     maximum_length: int = 4_000,
 ) -> str:
     """Fit a generated reply to Discord and optionally append the standard closing."""
+    response = normalize_generated_reply_layout(response)
     suffix = f"\n\n{AI_REPLY_CLOSING}" if include_closing else ""
     available = max(maximum_length - len(suffix), 0)
     return response[:available].rstrip() + suffix
@@ -489,7 +500,10 @@ class GeminiHelpfulReplyGenerator(GeminiThreadReplyGenerator):
         "transcript below. Directly address the recipient's latest issue and use relevant earlier "
         "context. Give actionable next steps when the transcript supports them. If information is "
         "missing, explain exactly what is needed or recommend appropriate human follow-up. Keep the "
-        "reply concise, professional, respectful, and easy to understand."
+        "reply concise, professional, respectful, and easy to understand. Avoid dense walls of text. "
+        "When the reply is longer than a few sentences, use short paragraphs or a compact list and "
+        "separate sections with blank lines. Represent those line breaks with \\n in the structured "
+        "reply string so the application can display them as real new lines."
     )
     reply_description = "The helpful and professional support reply."
     generation_label = "helpful AI reply"

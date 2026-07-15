@@ -64,6 +64,15 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             "Helpful answer\n\nCan I help with anything else?",
         )
 
+    def test_ai_reply_converts_literal_newline_escapes(self):
+        self.assertEqual(
+            finalize_generated_ai_reply(
+                "First paragraph.\\n\\nSecond paragraph.",
+                include_closing=False,
+            ),
+            "First paragraph.\n\nSecond paragraph.",
+        )
+
     def test_ai_error_description_includes_missing_name(self):
         error = NameError("name 'example_name' is not defined")
 
@@ -119,6 +128,8 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         _, request = session.request
         prompt = request["json"]["contents"][0]["parts"][0]["text"]
         self.assertIn("helpful, clear, warm, and practical", prompt)
+        self.assertIn("Avoid dense walls of text", prompt)
+        self.assertIn("line breaks with \\n", prompt)
         self.assertIn("My booking is missing.", prompt)
         self.assertIn("Can I help with anything else?", prompt)
 
