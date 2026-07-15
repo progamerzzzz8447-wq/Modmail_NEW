@@ -18,9 +18,12 @@ from dateutil import parser
 from core import checks
 from core.alias_parser import parse_autoreply_rule_spec, parse_reply_alias
 from core.ai_reviewer import (
+    AI_ALL_CLOSING,
+    AI_REPLY_CLOSING,
     AI_REPLY_FOOTER,
     GeminiAnnoyReplyGenerator,
     GeminiHelpfulReplyGenerator,
+    GeminiTicketSummaryGenerator,
     NO_MATCH,
     finalize_generated_ai_reply,
 )
@@ -1832,6 +1835,7 @@ class Modmail(commands.Cog):
         tone_label: str,
         staff_only: bool = False,
         include_closing: bool = True,
+        closing_text: str = AI_REPLY_CLOSING,
     ):
         """Generate, deliver, and audit a manual AI reply from the full thread history."""
         api_key = self.bot.config.get("gemini_api_key", convert=False)
@@ -1892,6 +1896,7 @@ class Modmail(commands.Cog):
                 response = finalize_generated_ai_reply(
                     response,
                     include_closing=include_closing,
+                    closing_text=closing_text,
                     maximum_length=maximum_response_length,
                 )
                 try:
@@ -1986,6 +1991,30 @@ class Modmail(commands.Cog):
             tone_label="helpful",
             staff_only=staff_only,
             include_closing=not confirmed_without_closing,
+        )
+
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
+    @checks.thread_only()
+    async def aiall(self, ctx, mode: str = None):
+        """Summarize the ticket and send a closure-ready all-inquiries response."""
+        normalized_mode = mode.casefold() if mode is not None else None
+        if normalized_mode not in {None, "raw"}:
+            raise commands.BadArgument(
+                f"Use `{self.bot.prefix}aiall` or `{self.bot.prefix}aiall raw`."
+            )
+
+        staff_only = normalized_mode == "raw"
+        await self._send_generated_ai_reply(
+            ctx,
+            GeminiTicketSummaryGenerator,
+            command_name="aiall raw" if staff_only else "aiall",
+            log_name="Manual all-inquiries AI summary",
+            tone_label="all-inquiries summary",
+            staff_only=staff_only,
+            include_closing=True,
+            closing_text=AI_ALL_CLOSING,
         )
 
     @commands.command()

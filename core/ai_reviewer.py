@@ -22,6 +22,10 @@ AI_REPLY_FOOTER = (
     "This reply is AI generated. If you require further assistance, please reply to this message"
 )
 AI_REPLY_CLOSING = "Can I help with anything else?"
+AI_ALL_CLOSING = (
+    "We have now answered all of your inquiries. Can we help with anything else? "
+    "Otherwise, this ticket will be closed."
+)
 ROBLOX_GAME_PASS_URL = "https://www.roblox.com/game-pass/"
 ROBLOX_GAME_PASS_AUTOREPLY = (
     "**This is an automated reply and may not apply to your specific case.**\n\n"
@@ -51,11 +55,12 @@ def finalize_generated_ai_reply(
     response: str,
     *,
     include_closing: bool = True,
+    closing_text: str = AI_REPLY_CLOSING,
     maximum_length: int = 4_000,
 ) -> str:
-    """Fit a generated reply to Discord and optionally append the standard closing."""
+    """Fit a generated reply to Discord and optionally append a fixed closing."""
     response = normalize_generated_reply_layout(response)
-    suffix = f"\n\n{AI_REPLY_CLOSING}" if include_closing else ""
+    suffix = f"\n\n{closing_text}" if include_closing and closing_text else ""
     available = max(maximum_length - len(suffix), 0)
     return response[:available].rstrip() + suffix
 
@@ -521,3 +526,19 @@ class GeminiHelpfulReplyGenerator(GeminiThreadReplyGenerator):
     reply_description = "The helpful and professional support reply."
     generation_label = "helpful AI reply"
     success_detail = "Generated a manual helpful support reply."
+
+
+class GeminiTicketSummaryGenerator(GeminiThreadReplyGenerator):
+    """Generate a concise closure-ready summary of a support ticket."""
+
+    style_instructions = (
+        "Write a concise, closure-ready summary addressed directly to the support recipient, based "
+        "on the complete ticket transcript below. Briefly recap their inquiries and the answers, "
+        "guidance, or actions already provided. Focus only on useful outcomes and omit internal bot "
+        "events, commands, audit details, and repetitive conversation. Use short paragraphs or a "
+        "compact list when that improves readability. Do not ask whether they need anything else and "
+        "do not say the ticket will close; the application appends that fixed closing afterward."
+    )
+    reply_description = "The concise closure-ready ticket summary."
+    generation_label = "all-inquiries summary"
+    success_detail = "Generated a closure-ready ticket summary."

@@ -3,12 +3,14 @@ import unittest
 from types import SimpleNamespace
 
 from core.ai_reviewer import (
+    AI_ALL_CLOSING,
     AI_REVIEW_MESSAGE_LIMIT,
     ROBLOX_GAME_PASS_AUTOREPLY,
     ApplicationReviewWindow,
     GeminiAnnoyReplyGenerator,
     GeminiAutoReplyReviewer,
     GeminiHelpfulReplyGenerator,
+    GeminiTicketSummaryGenerator,
     build_ticket_text,
     describe_ai_error,
     finalize_generated_ai_reply,
@@ -79,6 +81,12 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             "Helpful answer\n\nCan I help with anything else?",
         )
 
+    def test_all_inquiries_reply_uses_fixed_closure_warning(self):
+        self.assertEqual(
+            finalize_generated_ai_reply("Ticket summary.", closing_text=AI_ALL_CLOSING),
+            f"Ticket summary.\n\n{AI_ALL_CLOSING}",
+        )
+
     def test_ai_reply_converts_literal_newline_escapes(self):
         self.assertEqual(
             finalize_generated_ai_reply(
@@ -147,6 +155,28 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("line breaks with \\n", prompt)
         self.assertIn("My booking is missing.", prompt)
         self.assertIn("Can I help with anything else?", prompt)
+
+    async def test_generates_closure_ready_ticket_summary(self):
+        session = FakeSession(
+            FakeResponse(
+                200,
+                generate_content_output(
+                    {"reply": "You asked about payment, and staff provided the required steps."}
+                ),
+            )
+        )
+        generator = GeminiTicketSummaryGenerator(session, "test-key")
+
+        reply = await generator.generate("[time] Recipient\nHow is payment handled?")
+
+        self.assertEqual(
+            reply,
+            "You asked about payment, and staff provided the required steps.",
+        )
+        _, request = session.request
+        prompt = request["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("closure-ready summary", prompt)
+        self.assertIn("omit internal bot events", prompt)
 
     async def test_returns_only_a_configured_match(self):
         session = FakeSession(
