@@ -31,7 +31,8 @@ class AliasParserTests(unittest.TestCase):
         self.assertEqual(
             parse_reply_alias(
                 '"move applications" && "fareply Thanks" && '
-                '"notify <@&1391515982417100951>" && "close"'
+                '"notify <@&1391515982417100951>" && '
+                '"context Application specialists were notified." && "close"'
             ),
             [("fareply", "Thanks")],
         )

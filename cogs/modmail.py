@@ -1001,6 +1001,27 @@ class Modmail(commands.Cog):
             mention = "@" + user_or_role.lstrip("@")
         return mention
 
+    @commands.command(usage="<MESSAGE>")
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.thread_only()
+    async def context(self, ctx, *, message: str):
+        """Post plain staff-only context in a ticket, including from an alias."""
+        message = message.strip()
+        if not message:
+            raise commands.BadArgument("Provide the staff context message.")
+        if len(message) > 2_000:
+            raise commands.BadArgument("Staff context messages cannot exceed 2,000 characters.")
+
+        staff_message = await ctx.send(
+            message,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        try:
+            await self.bot.api.append_log(staff_message, type_="internal")
+        except Exception:
+            logger.warning("Failed to append an alias context message to the ticket log.", exc_info=True)
+        return staff_message
+
     @commands.command(aliases=["alert"])
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.thread_only()
@@ -2103,6 +2124,14 @@ class Modmail(commands.Cog):
             value=(
                 f"`{prefix}delete` — Delete the latest linked reply.\n"
                 f"`{prefix}delete MESSAGE_ID` — Delete a specific linked AI/staff reply."
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Automatic alias helpers",
+            value=(
+                '`"context MESSAGE"` — Post plain staff-only context in the ticket.\n'
+                '`"notify @role"` — Immediately ping a role in the staff ticket.'
             ),
             inline=False,
         )
