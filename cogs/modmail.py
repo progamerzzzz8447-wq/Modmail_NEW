@@ -1,6 +1,7 @@
 import asyncio
 import re
 from datetime import datetime, timezone, timedelta
+from io import BytesIO
 from itertools import zip_longest
 from typing import Optional, Union, List, Tuple, Literal
 import logging
@@ -16,7 +17,11 @@ from discord.utils import escape_markdown
 from dateutil import parser
 
 from core import checks
-from core.alias_parser import parse_autoreply_rule_spec, parse_reply_alias
+from core.alias_parser import (
+    format_autoreply_rule_spec,
+    parse_autoreply_rule_spec,
+    parse_reply_alias,
+)
 from core.ai_reviewer import (
     AI_ALL_CLOSING,
     AI_REPLY_CLOSING,
@@ -604,15 +609,41 @@ class Modmail(commands.Cog):
         Create an alias-backed rule with:
         - `{prefix}autoreply create "NAME: How can I apply"`
           `["MUST MENTION TO CHECK": apply, application, become, staff] apply`
+        - Add choices with `["ALTERNATIVES": {{"Application status": status-alias}},`
+          `{{"Application requirements": requirements-alias}}]`.
 
-        The final value is an existing reply/freply alias. Quoted multiline aliases
-        and all additional alias commands separated by `&&` execute in order.
+        The primary alias and every alternative must already exist. Once the trigger
+        matches, Gemini selects the best reply and executes that alias in full.
         """
         autoreplies = self.bot.config["autoreplies"]
+        raw_requested = False
+        if name is not None:
+            raw_match = re.fullmatch(r"(.+?)\s+raw\s*", name, re.IGNORECASE | re.DOTALL)
+            if raw_match is not None:
+                name = raw_match.group(1).strip()
+                raw_requested = True
         if name is not None:
             key = self._find_autoreply_key(autoreplies, name)
             if key is None:
                 embed = create_not_found_embed(name, autoreplies.keys(), "Autoreply")
+            elif raw_requested:
+                raw_command = (
+                    f"{self.bot.prefix}autoreply edit "
+                    f"{format_autoreply_rule_spec(key, autoreplies[key])}"
+                )
+                if len(raw_command) > 3_900:
+                    return await ctx.send(
+                        "The raw autoreply was too long for a code box, so it is attached below.",
+                        file=discord.File(
+                            BytesIO(raw_command.encode("utf-8")),
+                            filename=f"autoreply-{key}.txt",
+                        ),
+                    )
+                embed = discord.Embed(
+                    title=f'Raw autoreply - "{key}"',
+                    description=f"```\n{escape_code_block(raw_command)}\n```",
+                    color=self.bot.main_color,
+                )
             else:
                 entry = autoreplies[key]
                 embed = discord.Embed(
@@ -651,11 +682,40 @@ class Modmail(commands.Cog):
         if not isinstance(entry, dict):
             return str(entry)
         triggers = ", ".join(f"`{term}`" for term in (entry.get("triggers") or []))
-        return (
+        formatted = (
             f"**Name:** {entry.get('name') or key}\n"
             f"**Must mention:** {triggers or '[none]'}\n"
             f"**Alias:** `{entry.get('alias') or '[missing]'}`"
         )
+        alternatives = entry.get("alternatives") or []
+        if alternatives:
+            formatted += "\n**Alternatives:**\n" + "\n".join(
+                f"- {alternative.get('name') or '[unnamed]'}: "
+                f"`{alternative.get('alias') or '[missing]'}`"
+                for alternative in alternatives
+                if isinstance(alternative, dict)
+            )
+        return formatted
+
+    @staticmethod
+    def _autoreply_variants(key, entry):
+        """Return the primary and named alternative alias choices for a rule."""
+        if not isinstance(entry, dict):
+            return [(str(key), None)]
+        variants = [(str(entry.get("name") or key).strip(), str(entry.get("alias") or "").strip())]
+        variants.extend(
+            (
+                str(alternative.get("name") or "").strip(),
+                str(alternative.get("alias") or "").casefold().strip(),
+            )
+            for alternative in (entry.get("alternatives") or [])
+            if isinstance(alternative, dict)
+        )
+        return variants
+
+    @classmethod
+    def _autoreply_choice_count(cls, key, entry):
+        return len(cls._autoreply_variants(key, entry))
 
     @staticmethod
     def _find_autoreply_key(autoreplies, name):
@@ -664,6 +724,12 @@ class Modmail(commands.Cog):
             return normalized
         for key, entry in autoreplies.items():
             if isinstance(entry, dict) and str(entry.get("name", "")).casefold() == normalized:
+                return key
+            if isinstance(entry, dict) and any(
+                isinstance(alternative, dict)
+                and str(alternative.get("name", "")).casefold() == normalized
+                for alternative in (entry.get("alternatives") or [])
+            ):
                 return key
         return None
 
@@ -680,32 +746,44 @@ class Modmail(commands.Cog):
                 raise commands.BadArgument(str(exc)) from exc
 
             alias_name = entry["alias"]
-            raw_alias = self.bot.aliases.get(alias_name)
-            if raw_alias is None:
-                raise commands.BadArgument(
-                    f"Alias `{alias_name}` does not exist. Create it before this autoreply rule."
-                )
-            reply_steps = parse_reply_alias(raw_alias)
-            if reply_steps is None:
-                raise commands.BadArgument(
-                    "The alias must include at least one reply-style step with message text."
-                )
-            if len("\n\n".join(message for _, message in reply_steps)) > 4_000:
-                raise commands.BadArgument(
-                    "The combined alias replies cannot be longer than 4,000 characters."
-                )
-            if entry["name"].upper() == NO_MATCH or alias_name.upper() == NO_MATCH:
-                raise commands.BadArgument("That autoreply name is reserved.")
+            variants = self._autoreply_variants(alias_name, entry)
+            for display_name, variant_alias in variants:
+                if display_name.upper() == NO_MATCH or variant_alias.upper() == NO_MATCH:
+                    raise commands.BadArgument("That autoreply name is reserved.")
+                raw_alias = self.bot.aliases.get(variant_alias)
+                if raw_alias is None:
+                    raise commands.BadArgument(
+                        f"Alias `{variant_alias}` does not exist. Create it before this autoreply rule."
+                    )
+                reply_steps = parse_reply_alias(raw_alias)
+                if reply_steps is None:
+                    raise commands.BadArgument(
+                        f"Alias `{variant_alias}` must include a reply-style step with message text."
+                    )
+                if len("\n\n".join(message for _, message in reply_steps)) > 4_000:
+                    raise commands.BadArgument(
+                        f"Alias `{variant_alias}` has more than 4,000 characters of reply text."
+                    )
+
+            new_display_names = {name.casefold() for name, _ in variants}
             for existing_key, existing_entry in autoreplies.items():
-                if existing_key == alias_name or not isinstance(existing_entry, dict):
+                if existing_key == alias_name:
                     continue
-                if str(existing_entry.get("name", "")).casefold() == entry["name"].casefold():
-                    raise commands.BadArgument("Another autoreply already uses that display name.")
+                existing_names = {
+                    name.casefold()
+                    for name, _ in self._autoreply_variants(existing_key, existing_entry)
+                }
+                if new_display_names & existing_names:
+                    raise commands.BadArgument(
+                        "Another primary or alternative autoreply already uses that display name."
+                    )
 
             key = alias_name
+            alternative_count = len(variants) - 1
             response_description = (
-                f'`{entry["name"]}` will use alias `{alias_name}` when any recipient message '
-                "contains one of its must-mention terms; the ticket can trigger only once."
+                f'`{entry["name"]}` and {alternative_count} alternative(s) will be compared when '
+                "a recipient message contains one of the must-mention terms; Gemini will execute "
+                "only the best matching alias."
             )
         else:
             key = name.casefold().strip()
@@ -720,8 +798,16 @@ class Modmail(commands.Cog):
                 )
             response_description = f"`{key}` is ready for Gemini to select on new tickets."
 
-        if key not in autoreplies and len(autoreplies) >= 25:
-            raise commands.BadArgument("You can configure up to 25 AI autoreplies.")
+        existing_choice_count = sum(
+            self._autoreply_choice_count(existing_key, existing_entry)
+            for existing_key, existing_entry in autoreplies.items()
+            if existing_key != key
+        )
+        new_choice_count = self._autoreply_choice_count(key, entry)
+        if existing_choice_count + new_choice_count > 25:
+            raise commands.BadArgument(
+                "You can configure up to 25 total primary and alternative AI autoreply choices."
+            )
 
         existed = key in autoreplies
         autoreplies[key] = entry

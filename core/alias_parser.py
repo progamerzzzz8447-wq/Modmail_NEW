@@ -1,4 +1,5 @@
 import base64
+import json
 import re
 import typing
 from itertools import zip_longest
@@ -152,6 +153,87 @@ def parse_reply_alias(alias: str) -> typing.Optional[typing.List[typing.Tuple[st
     return parsed or None
 
 
+def _extract_autoreply_alternatives(value: str) -> typing.Tuple[str, typing.List[typing.Dict[str, str]]]:
+    """Remove and parse an optional ``ALTERNATIVES`` block from a rule value."""
+    marker = re.search(
+        r"\[\s*[\"']?alternatives[\"']?\s*:\s*",
+        value,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if marker is None:
+        return value, []
+
+    quote_char = None
+    escaped = False
+    closing_index = None
+    for index in range(marker.end(), len(value)):
+        character = value[index]
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\":
+            escaped = True
+            continue
+        if quote_char is not None:
+            if character == quote_char:
+                quote_char = None
+            continue
+        if character in "\"'":
+            quote_char = character
+        elif character == "]":
+            closing_index = index
+            break
+
+    if closing_index is None:
+        raise ValueError('The ["ALTERNATIVES": ...] block is missing its closing bracket.')
+
+    body = value[marker.end() : closing_index]
+    alternatives = []
+    cursor = 0
+    entry_pattern = re.compile(
+        r"\{\s*([\"'])(.*?)\1\s*:\s*(?:([\"'])(.*?)\3|([^,{}]+?))\s*\}",
+        re.DOTALL,
+    )
+    while True:
+        while cursor < len(body) and body[cursor].isspace():
+            cursor += 1
+        if cursor >= len(body):
+            break
+        if alternatives:
+            if body[cursor] != ",":
+                raise ValueError("Separate alternative entries with commas.")
+            cursor += 1
+            while cursor < len(body) and body[cursor].isspace():
+                cursor += 1
+            if cursor >= len(body):
+                break  # Permit a trailing comma.
+
+        match = entry_pattern.match(body, cursor)
+        if match is None:
+            raise ValueError(
+                'Use alternatives like {"Display name": alias-name}.'
+            )
+        alternative_name = match.group(2).strip()
+        alternative_alias = (match.group(4) or match.group(5) or "").strip()
+        if (
+            len(alternative_alias) >= 2
+            and alternative_alias[0] == alternative_alias[-1]
+            and alternative_alias[0] in "\"'"
+        ):
+            alternative_alias = alternative_alias[1:-1].strip()
+        alternatives.append(
+            {"name": alternative_name, "alias": alternative_alias.casefold()}
+        )
+        cursor = match.end()
+
+    if not alternatives:
+        raise ValueError("Configure at least one named alternative alias.")
+    alias_value = (value[: marker.start()] + " " + value[closing_index + 1 :]).strip()
+    if re.search(r"\[\s*[\"']?alternatives[\"']?\s*:", alias_value, re.IGNORECASE):
+        raise ValueError("Configure only one ALTERNATIVES block per autoreply rule.")
+    return alias_value, alternatives
+
+
 def parse_autoreply_rule_spec(name_argument: str, value: str) -> typing.Dict[str, typing.Any]:
     """Parse ``NAME``/``MUST MENTION``/alias syntax used by ``?autoreply create``."""
     name_match = re.fullmatch(r"\s*name\s*:\s*(.+?)\s*", str(name_argument or ""), re.IGNORECASE | re.DOTALL)
@@ -171,7 +253,8 @@ def parse_autoreply_rule_spec(name_argument: str, value: str) -> typing.Dict[str
     display_name = name_match.group(1).strip()
     triggers = [item.strip().strip("\"'") for item in value_match.group(1).split(",")]
     triggers = list(dict.fromkeys(item.casefold() for item in triggers if item))
-    alias_name = value_match.group(2).strip()
+    alias_value, alternatives = _extract_autoreply_alternatives(value_match.group(2).strip())
+    alias_name = alias_value.strip()
     if len(alias_name) >= 2 and alias_name[0] == alias_name[-1] and alias_name[0] in "\"'":
         alias_name = alias_name[1:-1].strip()
     alias_name = alias_name.casefold()
@@ -189,4 +272,53 @@ def parse_autoreply_rule_spec(name_argument: str, value: str) -> typing.Dict[str
     if not alias_name or len(alias_name) > 120:
         raise ValueError("Provide a valid alias name of no more than 120 characters.")
 
-    return {"name": display_name, "triggers": triggers, "alias": alias_name}
+    seen_names = {display_name.casefold()}
+    for alternative in alternatives:
+        alternative_name = alternative["name"]
+        alternative_alias = alternative["alias"]
+        if not alternative_name or len(alternative_name) > 100:
+            raise ValueError("Alternative display names must be between 1 and 100 characters.")
+        if not alternative_alias or len(alternative_alias) > 120:
+            raise ValueError("Alternative alias names must be between 1 and 120 characters.")
+        normalized_name = alternative_name.casefold()
+        if normalized_name in seen_names:
+            raise ValueError("Every primary and alternative display name must be unique.")
+        seen_names.add(normalized_name)
+    if len(alternatives) > 24:
+        raise ValueError("Configure no more than 24 alternatives for one autoreply rule.")
+
+    result = {"name": display_name, "triggers": triggers, "alias": alias_name}
+    if alternatives:
+        result["alternatives"] = alternatives
+    return result
+
+
+def format_autoreply_rule_spec(key: str, entry: typing.Any) -> str:
+    """Render an autoreply as copyable arguments for ``?autoreply edit``."""
+
+    def quote(value: typing.Any) -> str:
+        return json.dumps(str(value), ensure_ascii=False)
+
+    if not isinstance(entry, dict):
+        return f"{quote(key)} {entry}"
+
+    display_name = str(entry.get("name") or key)
+    triggers = ", ".join(quote(trigger) for trigger in (entry.get("triggers") or []))
+    alias_name = quote(entry.get("alias") or key)
+    result = (
+        f'{quote("NAME: " + display_name)} '
+        f'["MUST MENTION TO CHECK": {triggers}] {alias_name}'
+    )
+    alternatives = [
+        alternative
+        for alternative in (entry.get("alternatives") or [])
+        if isinstance(alternative, dict)
+    ]
+    if alternatives:
+        formatted_alternatives = ", ".join(
+            "{" + quote(alternative.get("name") or "") + ": "
+            + quote(alternative.get("alias") or "") + "}"
+            for alternative in alternatives
+        )
+        result += f' ["ALTERNATIVES": {formatted_alternatives}]'
+    return result

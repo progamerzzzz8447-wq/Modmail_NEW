@@ -2,6 +2,7 @@ import unittest
 
 from core.alias_parser import (
     DeferredDeleteMessage,
+    format_autoreply_rule_spec,
     normalize_alias,
     normalize_compact_fakeautoreply_invocation,
     parse_alias,
@@ -69,6 +70,61 @@ class AliasParserTests(unittest.TestCase):
             },
         )
 
+    def test_parses_named_autoreply_alternatives(self):
+        self.assertEqual(
+            parse_autoreply_rule_spec(
+                "NAME: Application help",
+                '["MUST MENTION TO CHECK": apply, application] apply '
+                '["ALTERNATIVES": {"Application status": app-status}, '
+                '{"Application requirements": "app requirements"}]',
+            ),
+            {
+                "name": "Application help",
+                "triggers": ["apply", "application"],
+                "alias": "apply",
+                "alternatives": [
+                    {"name": "Application status", "alias": "app-status"},
+                    {
+                        "name": "Application requirements",
+                        "alias": "app requirements",
+                    },
+                ],
+            },
+        )
+
+    def test_alternatives_block_can_precede_primary_alias(self):
+        parsed = parse_autoreply_rule_spec(
+            "NAME: Application help",
+            '["MUST MENTION TO CHECK": apply] '
+            '["ALTERNATIVES": {"Application status": status}] apply',
+        )
+
+        self.assertEqual(parsed["alias"], "apply")
+        self.assertEqual(
+            parsed["alternatives"],
+            [{"name": "Application status", "alias": "status"}],
+        )
+
+    def test_formats_autoreply_rule_as_raw_edit_arguments(self):
+        formatted = format_autoreply_rule_spec(
+            "apply",
+            {
+                "name": "Application help",
+                "triggers": ["apply", "application status"],
+                "alias": "apply",
+                "alternatives": [
+                    {"name": "Application status", "alias": "app-status"}
+                ],
+            },
+        )
+
+        self.assertEqual(
+            formatted,
+            '"NAME: Application help" '
+            '["MUST MENTION TO CHECK": "apply", "application status"] "apply" '
+            '["ALTERNATIVES": {"Application status": "app-status"}]',
+        )
+
     def test_rule_requires_name_triggers_and_alias(self):
         with self.assertRaises(ValueError):
             parse_autoreply_rule_spec("Apply", "[apply] apply")
@@ -76,6 +132,12 @@ class AliasParserTests(unittest.TestCase):
             parse_autoreply_rule_spec(
                 "NAME: Apply",
                 '["MUST MENTION TO CHECK": ] apply',
+            )
+        with self.assertRaises(ValueError):
+            parse_autoreply_rule_spec(
+                "NAME: Apply",
+                '["MUST MENTION TO CHECK": apply] apply '
+                '["ALTERNATIVES": {"Status": status}',
             )
 
 

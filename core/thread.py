@@ -1118,47 +1118,65 @@ class Thread:
             if not has_configured_trigger(ticket_text, entry.get("triggers") or []):
                 continue
 
-            display_name = str(entry.get("name") or key).strip()
-            alias_name = str(entry.get("alias") or "").casefold().strip()
-            raw_alias = aliases.get(alias_name)
-            if raw_alias is None:
-                errors.append(f'Alias "{alias_name or key}" does not exist.')
-                continue
-
-            steps = parse_reply_alias(raw_alias)
-            if steps is None:
-                errors.append(
-                    f'Alias "{alias_name}" has no reply-style step with message text.'
+            variants = [
+                (
+                    str(entry.get("name") or key).strip(),
+                    str(entry.get("alias") or "").casefold().strip(),
                 )
-                continue
+            ]
+            variants.extend(
+                (
+                    str(alternative.get("name") or "").strip(),
+                    str(alternative.get("alias") or "").casefold().strip(),
+                )
+                for alternative in (entry.get("alternatives") or [])
+                if isinstance(alternative, Mapping)
+            )
 
-            messages = []
-            try:
-                for command, response_text in steps:
-                    if command in FORMATTED_AI_REPLY_COMMANDS:
-                        response_text = self.bot.formatter.format(
-                            response_text,
-                            channel=self.channel,
-                            recipient=self.recipient,
-                            author=self.bot.user,
-                        )
-                    messages.append(response_text)
-            except Exception as exc:
-                errors.append(f'Alias "{alias_name}" could not be formatted ({type(exc).__name__}).')
-                continue
+            for display_name, alias_name in variants:
+                raw_alias = aliases.get(alias_name)
+                if not display_name or raw_alias is None:
+                    errors.append(f'Alias "{alias_name or key}" does not exist or has no name.')
+                    continue
 
-            combined_message = "\n\n".join(messages)
-            if len(combined_message) > 4_000:
-                errors.append(f'Alias "{alias_name}" exceeds the 4,000-character autoreply limit.')
-                continue
-            if display_name in choices:
-                errors.append(f'Autoreply display name "{display_name}" is duplicated.')
-                continue
-            choices[display_name] = combined_message
-            alias_actions[display_name] = {
-                "alias": alias_name,
-                "steps": parse_alias(raw_alias),
-            }
+                steps = parse_reply_alias(raw_alias)
+                if steps is None:
+                    errors.append(
+                        f'Alias "{alias_name}" has no reply-style step with message text.'
+                    )
+                    continue
+
+                messages = []
+                try:
+                    for command, response_text in steps:
+                        if command in FORMATTED_AI_REPLY_COMMANDS:
+                            response_text = self.bot.formatter.format(
+                                response_text,
+                                channel=self.channel,
+                                recipient=self.recipient,
+                                author=self.bot.user,
+                            )
+                        messages.append(response_text)
+                except Exception as exc:
+                    errors.append(
+                        f'Alias "{alias_name}" could not be formatted ({type(exc).__name__}).'
+                    )
+                    continue
+
+                combined_message = "\n\n".join(messages)
+                if len(combined_message) > 4_000:
+                    errors.append(
+                        f'Alias "{alias_name}" exceeds the 4,000-character autoreply limit.'
+                    )
+                    continue
+                if any(name.casefold() == display_name.casefold() for name in choices):
+                    errors.append(f'Autoreply display name "{display_name}" is duplicated.')
+                    continue
+                choices[display_name] = combined_message
+                alias_actions[display_name] = {
+                    "alias": alias_name,
+                    "steps": parse_alias(raw_alias),
+                }
 
         return choices, alias_actions, errors
 
