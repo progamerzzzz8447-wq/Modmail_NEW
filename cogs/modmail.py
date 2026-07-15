@@ -925,6 +925,24 @@ class Modmail(commands.Cog):
         `@here` and `@everyone` can be substituted with `here` and `everyone`.
         `user_or_role` may be a user ID, mention, name. role ID, mention, name, "everyone", or "here".
         """
+        # In an automatic AI alias, ``"notify @role"`` means notify the role
+        # immediately in the staff ticket. Direct staff use of ``?notify``
+        # retains its original "notify on the next message" behavior.
+        if getattr(ctx, "_ai_autoreply", False):
+            if not isinstance(user_or_role, discord.Role):
+                raise commands.BadArgument(
+                    'The automatic alias step must use "notify @role" with a valid role.'
+                )
+            return await ctx.send(
+                user_or_role.mention,
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=False,
+                    users=False,
+                    roles=[user_or_role],
+                    replied_user=False,
+                ),
+            )
+
         mention = self.parse_user_or_role(ctx, user_or_role)
         if mention is None:
             raise commands.BadArgument(f"{user_or_role} is not a valid user or role.")
