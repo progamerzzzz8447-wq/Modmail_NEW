@@ -24,16 +24,12 @@ from core.alias_parser import (
 )
 from core.ai_reviewer import (
     AI_ALL_CLOSING,
-    AI_LEARNING_ENTRY_FOOTER,
     AI_REPLY_CLOSING,
     AI_REPLY_FOOTER,
     GeminiAnnoyReplyGenerator,
     GeminiHelpfulReplyGenerator,
-    GeminiLearningSummaryGenerator,
     GeminiTicketSummaryGenerator,
-    NO_REUSABLE_LEARNING,
     NO_MATCH,
-    build_learning_transcript,
     find_command_references,
     finalize_generated_ai_reply,
 )
@@ -48,61 +44,6 @@ logger = getLogger(__name__)
 MANUAL_AI_ROLE_IDS = (1391515982417100951, 1516405254571298866)
 
 
-class AiLearningApprovalView(discord.ui.View):
-    """Owner-only approval controls for one closed ticket learning scan."""
-
-    def __init__(self, cog, ticket_channel_id: int):
-        super().__init__(timeout=604_800)
-        self.cog = cog
-        self.ticket_channel_id = ticket_channel_id
-        self.handled = False
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id not in self.cog.bot.bot_owner_ids:
-            await interaction.response.send_message(
-                "Only a configured bot owner can approve AI learning.",
-                ephemeral=True,
-            )
-            return False
-        if self.handled:
-            await interaction.response.send_message(
-                "This learning request has already been handled.",
-                ephemeral=True,
-            )
-            return False
-        return True
-
-    def disable_controls(self):
-        self.handled = True
-        for child in self.children:
-            child.disabled = True
-        self.stop()
-
-    @discord.ui.button(
-        label="Yes — scan and learn",
-        style=discord.ButtonStyle.success,
-        custom_id="ai_learning:approve",
-    )
-    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.disable_controls()
-        await interaction.response.edit_message(view=self)
-        await self.cog._approve_ai_learning(
-            interaction.message,
-            self.ticket_channel_id,
-            interaction.user,
-        )
-
-    @discord.ui.button(
-        label="No — discard",
-        style=discord.ButtonStyle.danger,
-        custom_id="ai_learning:discard",
-    )
-    async def discard(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.disable_controls()
-        await interaction.response.defer()
-        await interaction.message.delete()
-
-
 class Modmail(commands.Cog):
     """Commands directly related to Modmail functionality."""
 
@@ -110,164 +51,6 @@ class Modmail(commands.Cog):
         self.bot = bot
         self._snoozed_cache = []
         self._auto_unsnooze_task = self.bot.loop.create_task(self.auto_unsnooze_task())
-
-    async def _get_ai_learning_channel(self):
-        channel_id = self.bot.config.get("ai_learning_storage_channel_id")
-        if not channel_id:
-            return None
-        try:
-            channel_id = int(channel_id)
-            channel = self.bot.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
-        except (TypeError, ValueError, discord.HTTPException):
-            logger.warning("AI Learning Storage channel could not be resolved.", exc_info=True)
-            return None
-        return channel if hasattr(channel, "send") else None
-
-    def _closed_log_url(self, log_data):
-        if not isinstance(log_data, dict) or not log_data.get("key"):
-            return None
-        prefix = str(self.bot.config.get("log_url_prefix") or "").strip("/")
-        if prefix == "NONE":
-            prefix = ""
-        return (
-            f"{str(self.bot.config.get('log_url') or '').strip('/')}"
-            f"{'/' + prefix if prefix else ''}/{log_data['key']}"
-        )
-
-    @commands.Cog.listener()
-    async def on_thread_close(self, thread, closer, silent, delete_channel, message, scheduled):
-        """Ask an owner whether a closed human-staff conversation should be learned."""
-        if not self.bot.config.get("ai_learning_enabled") or thread.channel is None:
-            return
-        try:
-            log_data = await self.bot.api.get_log(thread.channel.id)
-            _, staff_reply_count = build_learning_transcript(
-                log_data or {},
-                bot_user_id=self.bot.user.id,
-            )
-            if staff_reply_count == 0:
-                return
-            storage_channel = await self._get_ai_learning_channel()
-            if storage_channel is None:
-                return
-
-            log_url = self._closed_log_url(log_data)
-            embed = discord.Embed(
-                title="Should AI scan this closed ticket?",
-                description=(
-                    f"This ticket contains **{staff_reply_count}** human staff "
-                    f"repl{'y' if staff_reply_count == 1 else 'ies'}.\n\n"
-                    "Choose **Yes** to extract reusable, non-personal support knowledge. "
-                    "Choose **No** to discard this request."
-                ),
-                color=self.bot.main_color,
-                timestamp=discord.utils.utcnow(),
-            )
-            if log_url:
-                embed.add_field(name="Closed ticket", value=f"[Open ticket log]({log_url})")
-            embed.set_footer(text=f"Ticket channel ID: {thread.channel.id}")
-            owner_mentions = " ".join(
-                f"<@{owner_id}>" for owner_id in sorted(self.bot.bot_owner_ids)
-            )
-            await storage_channel.send(
-                content=owner_mentions or None,
-                embed=embed,
-                view=AiLearningApprovalView(self, thread.channel.id),
-                allowed_mentions=discord.AllowedMentions(
-                    everyone=False,
-                    users=True,
-                    roles=False,
-                    replied_user=False,
-                ),
-            )
-        except Exception:
-            logger.warning("Failed to create the closed-ticket AI learning review.", exc_info=True)
-
-    async def _approve_ai_learning(self, approval_message, ticket_channel_id: int, approver):
-        """Generate and store an approved reusable knowledge summary."""
-        try:
-            log_data = await self.bot.api.get_log(ticket_channel_id)
-            transcript, staff_reply_count = build_learning_transcript(
-                log_data or {},
-                bot_user_id=self.bot.user.id,
-            )
-            if staff_reply_count == 0 or not transcript:
-                raise commands.CommandError("No eligible human staff replies remain to scan.")
-
-            api_key = self.bot.config.get("gemini_api_key", convert=False)
-            if not api_key or self.bot.session is None:
-                raise commands.CommandError("Gemini API credentials are not configured.")
-            generator = GeminiLearningSummaryGenerator(
-                self.bot.session,
-                str(api_key),
-                model=str(self.bot.config.get("gemini_model") or "gemini-3.1-flash-lite"),
-                timeout_seconds=30,
-            )
-            summary = await generator.generate(transcript)
-            if summary is None:
-                raise commands.CommandError(
-                    generator.last_detail or "Gemini could not summarize this ticket."
-                )
-
-            log_url = self._closed_log_url(log_data)
-            if summary.strip() == NO_REUSABLE_LEARNING:
-                embed = discord.Embed(
-                    title="AI learning scan complete",
-                    description="No safe, reusable support knowledge was found in this ticket.",
-                    color=self.bot.error_color,
-                    timestamp=discord.utils.utcnow(),
-                )
-            else:
-                embed = discord.Embed(
-                    title="AI Learning Entry",
-                    description=summary[:4_000],
-                    color=self.bot.main_color,
-                    timestamp=discord.utils.utcnow(),
-                )
-                if log_url:
-                    embed.add_field(name="Approved source", value=f"[Closed ticket log]({log_url})")
-                embed.add_field(
-                    name="Approved by",
-                    value=f"{approver.mention} (`{approver.id}`)",
-                )
-                embed.set_footer(text=AI_LEARNING_ENTRY_FOOTER)
-
-            await approval_message.edit(content=None, embed=embed, view=None)
-        except Exception as exc:
-            logger.warning("Approved AI learning scan failed.", exc_info=True)
-            embed = discord.Embed(
-                title="AI learning scan failed",
-                description=str(exc) or type(exc).__name__,
-                color=self.bot.error_color,
-            )
-            await approval_message.edit(content=None, embed=embed, view=None)
-
-    async def _load_ai_learning_knowledge(self, *, max_chars: int = 12_000) -> str:
-        """Load recent owner-approved summaries from AI Learning Storage."""
-        storage_channel = await self._get_ai_learning_channel()
-        if storage_channel is None or not hasattr(storage_channel, "history"):
-            return ""
-
-        newest_entries = []
-        total_chars = 0
-        try:
-            async for message in storage_channel.history(limit=100):
-                if message.author.id != self.bot.user.id:
-                    continue
-                for embed in message.embeds:
-                    footer_text = embed.footer.text if embed.footer else ""
-                    summary = (embed.description or "").strip()
-                    if footer_text != AI_LEARNING_ENTRY_FOOTER or not summary:
-                        continue
-                    entry = f"APPROVED SUPPORT KNOWLEDGE:\n{summary}"
-                    if total_chars + len(entry) > max_chars:
-                        continue
-                    newest_entries.append(entry)
-                    total_chars += len(entry)
-        except Exception:
-            logger.warning("Failed to read approved AI learning entries.", exc_info=True)
-            return ""
-        return "\n\n---\n\n".join(reversed(newest_entries))
 
     @commands.Cog.listener()
     async def on_thread_reply(self, thread, from_mod, message, anonymous, plain):
@@ -2213,15 +1996,10 @@ class Modmail(commands.Cog):
 
         response = None
         delivery_error = None
-        approved_knowledge = await self._load_ai_learning_knowledge()
         async with safe_typing(ctx):
-            response = await generator.generate(
-                transcript,
-                approved_knowledge=approved_knowledge,
-            )
+            response = await generator.generate(transcript)
             if response is not None:
-                approved_commands = find_command_references(approved_knowledge)
-                unsupported_commands = find_command_references(response) - approved_commands
+                unsupported_commands = find_command_references(response)
                 if unsupported_commands:
                     command_list = ", ".join(
                         f"{self.bot.prefix}{command}"
@@ -2229,17 +2007,14 @@ class Modmail(commands.Cog):
                     )
                     response = await generator.generate(
                         transcript,
-                        approved_knowledge=approved_knowledge,
                         correction=(
                             f"The previous draft invented or used unapproved command(s): "
-                            f"{command_list}. Do not mention any Discord command unless it appears "
-                            "in approved knowledge. Answer using verified information only; if the "
-                            "request is unclear, ask one concise clarification question."
+                            f"{command_list}. Do not mention any Discord command. Answer using "
+                            "verified information only; if the request is unclear, ask one concise "
+                            "clarification question."
                         ),
                     )
-                    if response is None or (
-                        find_command_references(response) - approved_commands
-                    ):
+                    if response is None or find_command_references(response):
                         response = (
                             "I do not have enough verified information to answer that request. "
                             "Could you clarify exactly what you need help with?"
@@ -2383,14 +2158,6 @@ class Modmail(commands.Cog):
             value=(
                 '`"context MESSAGE"` — Post plain staff-only context in the ticket.\n'
                 '`"notify @role"` — Immediately ping a role in the staff ticket.'
-            ),
-            inline=False,
-        )
-        embed.add_field(
-            name="Owner-approved learning",
-            value=(
-                "Closed tickets with human staff replies create a **Yes / No** review in AI "
-                "Learning Storage. Approved summaries become trusted context for future AI replies."
             ),
             inline=False,
         )

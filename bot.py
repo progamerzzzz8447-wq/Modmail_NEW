@@ -1003,6 +1003,8 @@ class ModmailBot(commands.Bot):
                 forwarded_msg = ForwardedMessage(message, combined_content)
                 await thread.send(forwarded_msg)
                 await self.add_reaction(message, sent_emoji)
+                if await thread.auto_close_for_abuse(forwarded_msg):
+                    return
                 self.dispatch("thread_reply", thread, False, message, False, False)
                 return
             else:
@@ -1093,6 +1095,8 @@ class ModmailBot(commands.Bot):
                     forwarded_msg = ForwardedMessage(message, ref_msg)
                     await thread.send(forwarded_msg)
                     await self.add_reaction(message, sent_emoji)
+                    if await thread.auto_close_for_abuse(forwarded_msg):
+                        return
                     self.dispatch("thread_reply", thread, False, message, False, False)
                     return
                 else:
@@ -1223,6 +1227,8 @@ class ModmailBot(commands.Bot):
                                                     exc_info=True,
                                                 )
                                     await self.add_reaction(message, sent_emoji)
+                                    if await new_thread.auto_close_for_abuse(message):
+                                        return
                                     self.dispatch(
                                         "thread_reply",
                                         new_thread,
@@ -1247,6 +1253,8 @@ class ModmailBot(commands.Bot):
                             logger.error("Failed to send message:", exc_info=True)
 
                 await self.add_reaction(message, sent_emoji)
+                if await thread.auto_close_for_abuse(message):
+                    return
                 self.dispatch("thread_reply", thread, False, message, False, False)
 
     def _get_snippet_command(self) -> commands.Command:

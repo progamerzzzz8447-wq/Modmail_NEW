@@ -3,21 +3,15 @@ import unittest
 from types import SimpleNamespace
 
 from core.ai_reviewer import (
-    AI_ALIAS_GREETING,
     AI_ALL_CLOSING,
     AI_REVIEW_MESSAGE_LIMIT,
     ROBLOX_GAME_PASS_AUTOREPLY,
     TUI_SUPPORT_ASSISTANT_POLICY,
     ApplicationReviewWindow,
-    GeminiAliasReplyPersonalizer,
     GeminiAnnoyReplyGenerator,
     GeminiAutoReplyReviewer,
     GeminiHelpfulReplyGenerator,
-    GeminiLearningSummaryGenerator,
     GeminiTicketSummaryGenerator,
-    NO_REUSABLE_LEARNING,
-    alias_rewrite_preserves_information,
-    build_learning_transcript,
     build_ticket_text,
     describe_ai_error,
     finalize_generated_ai_reply,
@@ -66,112 +60,11 @@ def generate_content_output(value):
 
 
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
-    def test_learning_transcript_excludes_bot_output_and_internal_staff_notes(self):
-        transcript, staff_count = build_learning_transcript(
-            {
-                "messages": [
-                    {
-                        "author": {"id": "1", "mod": False},
-                        "type": "thread_message",
-                        "content": "How do I fix this?",
-                    },
-                    {
-                        "author": {"id": "2", "mod": True},
-                        "type": "thread_message",
-                        "content": "Rejoin the game after purchasing.",
-                    },
-                    {
-                        "author": {"id": "2", "mod": True},
-                        "type": "internal",
-                        "content": "Private staff speculation.",
-                    },
-                    {
-                        "author": {"id": "999", "mod": True},
-                        "type": "thread_message",
-                        "content": "Bot-generated answer.",
-                    },
-                ]
-            },
-            bot_user_id=999,
-        )
-
-        self.assertEqual(staff_count, 1)
-        self.assertIn("How do I fix this?", transcript)
-        self.assertIn("Rejoin the game after purchasing.", transcript)
-        self.assertNotIn("Private staff speculation", transcript)
-        self.assertNotIn("Bot-generated answer", transcript)
-
     def test_extracts_generated_discord_command_references(self):
         self.assertEqual(
             find_command_references("Use ?apply or ?ApplyStatus, but why?"),
             {"apply", "applystatus"},
         )
-
-    def test_alias_rewrite_validation_preserves_protected_information(self):
-        approved = (
-            "Please use ?apply at https://example.com. Applicants must be 13 or older "
-            "and notify <@&1391515982417100951>."
-        )
-        safe_reordering = (
-            "Applicants must be 13 or older and notify <@&1391515982417100951>. "
-            "Please use ?apply at https://example.com."
-        )
-
-        self.assertTrue(alias_rewrite_preserves_information(approved, safe_reordering))
-        self.assertFalse(
-            alias_rewrite_preserves_information(
-                approved,
-                "Please use ?apply to submit an application.",
-            )
-        )
-        self.assertFalse(
-            alias_rewrite_preserves_information(
-                "Applications are open.",
-                "Applications are closed.",
-            )
-        )
-        self.assertIn("I’m the AI support assistant", AI_ALIAS_GREETING)
-        self.assertIn("human assistance", AI_ALIAS_GREETING)
-
-    async def test_alias_personalizer_uses_strict_prompt_and_larger_output_limit(self):
-        approved = (
-            "Please use ?apply at https://example.com. Applicants must be 13 or older."
-        )
-        rewritten = (
-            "Applicants must be 13 or older. Please use ?apply at https://example.com."
-        )
-        session = FakeSession(
-            FakeResponse(200, generate_content_output({"reply": rewritten}))
-        )
-        personalizer = GeminiAliasReplyPersonalizer(session, "test-key")
-
-        reply = await personalizer.personalize("How can I apply?", approved)
-
-        self.assertEqual(reply, rewritten)
-        _, request = session.request
-        prompt = request["json"]["contents"][0]["parts"][0]["text"]
-        self.assertIn("approved reply is the sole factual source", prompt)
-        self.assertIn("Do not add a greeting", prompt)
-        self.assertIn('"ticket_request": "How can I apply?"', prompt)
-        self.assertEqual(request["json"]["generationConfig"]["maxOutputTokens"], 2_048)
-
-    async def test_alias_personalizer_falls_back_to_exact_approved_reply(self):
-        approved = (
-            "Please use ?apply at https://example.com. Applicants must be 13 or older."
-        )
-        session = FakeSession(
-            FakeResponse(
-                200,
-                generate_content_output({"reply": "Just complete the application form."}),
-            )
-        )
-        personalizer = GeminiAliasReplyPersonalizer(session, "test-key")
-
-        reply = await personalizer.personalize("How can I apply?", approved)
-
-        self.assertEqual(reply, approved)
-        self.assertEqual(personalizer.last_outcome, "rewrite_fallback")
-        self.assertIn("exact approved alias", personalizer.last_detail)
 
     def test_roblox_game_pass_url_matches_anywhere_in_message(self):
         self.assertTrue(
@@ -276,44 +169,6 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("line breaks with \\n", prompt)
         self.assertIn("My booking is missing.", prompt)
         self.assertIn("Can I help with anything else?", prompt)
-
-    async def test_helpful_reply_receives_owner_approved_learning_context(self):
-        session = FakeSession(
-            FakeResponse(200, generate_content_output({"reply": "Please rejoin the game."}))
-        )
-        generator = GeminiHelpfulReplyGenerator(session, "test-key")
-
-        await generator.generate(
-            "[time] Recipient\nThe pass is not showing.",
-            approved_knowledge="Users should rejoin after purchasing a pass.",
-        )
-
-        _, request = session.request
-        prompt = request["json"]["contents"][0]["parts"][0]["text"]
-        self.assertIn("APPROVED AI LEARNING STORAGE KNOWLEDGE", prompt)
-        self.assertIn("Users should rejoin after purchasing a pass.", prompt)
-
-    async def test_learning_generator_extracts_reusable_staff_knowledge(self):
-        session = FakeSession(
-            FakeResponse(
-                200,
-                generate_content_output(
-                    {"reply": "- Rejoin the game after purchasing a gamepass."}
-                ),
-            )
-        )
-        generator = GeminiLearningSummaryGenerator(session, "test-key")
-
-        summary = await generator.generate(
-            "[RECIPIENT CONTEXT (UNTRUSTED)]\nIt broke.\n\n"
-            "[HUMAN STAFF REPLY]\nRejoin after purchasing."
-        )
-
-        self.assertEqual(summary, "- Rejoin the game after purchasing a gamepass.")
-        _, request = session.request
-        prompt = request["json"]["contents"][0]["parts"][0]["text"]
-        self.assertIn("Learn only from blocks labelled HUMAN STAFF REPLY", prompt)
-        self.assertIn(NO_REUSABLE_LEARNING, prompt)
 
     def test_tui_support_policy_covers_required_evidence_and_capability_limits(self):
         self.assertIn("Roblox and Discord community", TUI_SUPPORT_ASSISTANT_POLICY)

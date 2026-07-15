@@ -44,8 +44,6 @@ class ConfigManager:
         "gemini_ai_enabled": True,
         "gemini_model": "gemini-3.1-flash-lite",
         "gemini_log_channel_id": "1526602233737773146",
-        "ai_learning_enabled": True,
-        "ai_learning_storage_channel_id": "1527085097201696880",
         # recipient reply reminders
         "recipient_reply_reminder_delay": 43_200,
         "recipient_reply_reminder_text": (
@@ -307,7 +305,6 @@ class ConfigManager:
         "thread_creation_menu_precreate_channel",
         "thread_creation_menu_embed_large_image",
         "gemini_ai_enabled",
-        "ai_learning_enabled",
     }
 
     enums = {

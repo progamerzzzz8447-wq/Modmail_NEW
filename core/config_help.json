@@ -30,21 +30,6 @@
       "The Gemini API key is never included in audit logs."
     ]
   },
-  "ai_learning_enabled": {
-    "type": "boolean",
-    "description": "When enabled, closed tickets containing human staff replies create an owner approval request in AI Learning Storage. Approved summaries become trusted context for future generated AI replies.",
-    "examples": [
-      "`{prefix}config set ai_learning_enabled yes`",
-      "`{prefix}config set ai_learning_enabled no`"
-    ]
-  },
-  "ai_learning_storage_channel_id": {
-    "type": "channel",
-    "description": "The channel used for closed-ticket AI learning approval requests and approved knowledge summaries.",
-    "examples": [
-      "`{prefix}config set ai_learning_storage_channel_id 1527085097201696880`"
-    ]
-  },
   "recipient_reply_reminder_delay": {
     "default": "12 hours",
     "description": "How long a recipient follow-up may remain unanswered before subscribed users are pinged in the ticket.",

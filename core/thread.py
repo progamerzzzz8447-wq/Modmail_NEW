@@ -21,12 +21,11 @@ from discord.ext.commands.view import StringView
 from lottie.importers import importers as l_importers
 from lottie.exporters import exporters as l_exporters
 
+from core.abuse_filter import ABUSE_AUTO_CLOSE_MESSAGE, contains_abusive_language
 from core.ai_reviewer import (
-    AI_ALIAS_GREETING,
     AI_REPLY_FOOTER,
     ROBLOX_GAME_PASS_AUTOREPLY,
     ApplicationReviewWindow,
-    GeminiAliasReplyPersonalizer,
     GeminiAutoReplyReviewer,
     build_ticket_text,
     describe_ai_error,
@@ -97,6 +96,7 @@ class Thread:
         self._ai_review_completed = False
         self._ai_review_window = ApplicationReviewWindow()
         self._ai_review_lock = asyncio.Lock()
+        self._abuse_close_lock = asyncio.Lock()
         # --- SNOOZE STATE ---
         self.snoozed = False  # True if thread is snoozed
         self.snooze_data = None  # Dict with channel/category/position/messages for restoration
@@ -985,9 +985,61 @@ class Thread:
             ticket_text = forwarded_text[:12_000]
         return ticket_text
 
+    def contains_abusive_message(self, message) -> bool:
+        """Return whether a recipient message should trigger the automatic abuse close."""
+        return message is not None and contains_abusive_language(self._ai_ticket_text(message))
+
+    async def auto_close_for_abuse(self, message) -> bool:
+        """Relay the approved abuse warning, log it, and close a matching ticket once."""
+        if not self.contains_abusive_message(message):
+            return False
+
+        async with self._abuse_close_lock:
+            if self.channel is None or self.channel.id in self.manager.closing:
+                return True
+
+            synthetic = DummyMessage(copy.copy(message))
+            synthetic.author = self.bot.user
+            synthetic.channel = self.channel
+            synthetic.guild = self.channel.guild
+            synthetic.content = ABUSE_AUTO_CLOSE_MESSAGE
+            synthetic.attachments = []
+            synthetic.embeds = []
+            synthetic.stickers = []
+            synthetic.created_at = discord.utils.utcnow()
+            synthetic.id = generate_ai_message_joint_id()
+
+            delivered = False
+            try:
+                result = await self.reply(
+                    synthetic,
+                    content=ABUSE_AUTO_CLOSE_MESSAGE,
+                )
+                delivered = isinstance(result, tuple) and bool(result[0])
+            except Exception:
+                logger.warning(
+                    "Failed to send the normal abuse auto-close warning; using the close message.",
+                    exc_info=True,
+                )
+
+            try:
+                await self.close(
+                    closer=self.bot.user,
+                    silent=delivered,
+                    message=ABUSE_AUTO_CLOSE_MESSAGE,
+                )
+            except Exception:
+                logger.error("Failed to automatically close an abusive ticket.", exc_info=True)
+            return True
+
     async def consider_ai_autoreply(self, message) -> None:
         """Run deterministic and Gemini autoreplies for qualifying recipient messages."""
         if message is None:
+            return
+
+        # Abuse handling is deterministic and closes the ticket after relay. Never spend an AI
+        # request or send another automatic response for a message that will be closed.
+        if self.contains_abusive_message(message):
             return
 
         async with self._ai_review_lock:
@@ -1207,26 +1259,8 @@ class Thread:
             raise commands.CommandNotFound(f'Alias step command "{ctx.invoked_with}" was not found.')
         await self.bot.invoke(ctx)
 
-    async def _execute_ai_alias(
-        self,
-        display_name: str,
-        alias_action,
-        source_message,
-        ticket_text: str,
-    ) -> typing.List[str]:
-        """Execute an alias and conservatively personalize its recipient-facing replies."""
-        api_key = self.bot.config.get("gemini_api_key", convert=False)
-        personalizer = None
-        if api_key and self.bot.session is not None:
-            personalizer = GeminiAliasReplyPersonalizer(
-                self.bot.session,
-                str(api_key),
-                model=str(self.bot.config.get("gemini_model") or "gemini-3.1-flash-lite"),
-                timeout_seconds=30,
-            )
-
-        sent_responses = []
-        is_first_reply = True
+    async def _execute_ai_alias(self, display_name: str, alias_action, source_message) -> None:
+        """Execute every alias step in order while preserving the AI footer on replies."""
         for step in alias_action["steps"]:
             parts = step.strip().split(maxsplit=1)
             command = parts[0].casefold() if parts else ""
@@ -1240,21 +1274,9 @@ class Thread:
                         author=self.bot.user,
                     )
 
-                if personalizer is not None:
-                    response_text = await personalizer.personalize(ticket_text, response_text)
-
-                if is_first_reply:
-                    greeted_response = f"{AI_ALIAS_GREETING}\n\n{response_text}"
-                    # Never truncate approved information merely to fit the introduction.
-                    if len(greeted_response) <= 4_000:
-                        response_text = greeted_response
-                    is_first_reply = False
-
                 await self._send_ai_autoreply(display_name, response_text)
-                sent_responses.append(response_text)
                 continue
             await self._invoke_ai_alias_step(step, source_message)
-        return sent_responses
 
     async def _run_ai_review(self, message, ticket_text: str) -> None:
         """Run Gemini for one qualifying recipient message, failing open on every error."""
@@ -1351,14 +1373,7 @@ class Thread:
                 if alias_action is None:
                     await self._send_ai_autoreply(selected, response_text)
                 else:
-                    sent_responses = await self._execute_ai_alias(
-                        selected,
-                        alias_action,
-                        message,
-                        ticket_text,
-                    )
-                    if sent_responses:
-                        response_text = "\n\n".join(sent_responses)
+                    await self._execute_ai_alias(selected, alias_action, message)
                 if alias_action is not None:
                     delivery_status = f'AI alias `{alias_action["alias"]}` executed in full.'
                     if is_initial_message:
@@ -1553,6 +1568,8 @@ class Thread:
 
         async def activate_auto_triggers():
             if initial_message:
+                if self.contains_abusive_message(initial_message):
+                    return
                 message = DummyMessage(copy.copy(initial_message))
 
                 try:
@@ -3503,6 +3520,9 @@ class ThreadManager:
                                     "Failed to add sent reaction to user's DM: %s",
                                     e,
                                 )
+                            if await self.outer_thread.auto_close_for_abuse(message):
+                                setattr(self.outer_thread, "_pending_menu", False)
+                                return
                             # Dispatch thread_reply event for parity
                             self.outer_thread.bot.dispatch(
                                 "thread_reply",
