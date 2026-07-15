@@ -22,6 +22,7 @@ from core.alias_parser import (
     parse_autoreply_rule_spec,
     parse_reply_alias,
 )
+from core.abuse_filter import contains_abusive_language, normalize_custom_abuse_term
 from core.ai_reviewer import (
     AI_ALL_CLOSING,
     AI_REPLY_CLOSING,
@@ -843,6 +844,144 @@ class Modmail(commands.Cog):
                 color=self.bot.main_color,
             )
         )
+
+    def _custom_abuse_terms(self):
+        raw_terms = self.bot.config.get("abuse_filter_extra_terms") or []
+        if isinstance(raw_terms, str):
+            raw_terms = [raw_terms]
+        return sorted(
+            dict.fromkeys(
+                normalized
+                for normalized in (
+                    normalize_custom_abuse_term(term) for term in raw_terms
+                )
+                if normalized
+            )
+        )
+
+    @commands.group(aliases=["abusewords"], invoke_without_command=True)
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def abuseword(self, ctx):
+        """Manage additional words and phrases that automatically close tickets."""
+        prefix = self.bot.prefix
+        terms = self._custom_abuse_terms()
+        await ctx.send(
+            embed=discord.Embed(
+                title="Automatic abuse-word filter",
+                description=(
+                    "The built-in severe-abuse list is always active. Additional entries persist "
+                    "until removed. Enter their normal spelling; common evasions are detected "
+                    "automatically.\n\n"
+                    f"`{prefix}abuseword add WORD OR PHRASE`\n"
+                    f"`{prefix}abuseword remove WORD OR PHRASE`\n"
+                    f"`{prefix}abuseword list`\n\n"
+                    f"**Custom entries:** {len(terms)}/100"
+                ),
+                color=self.bot.main_color,
+            )
+        )
+
+    @abuseword.command(name="add")
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def abuseword_add(self, ctx, *, term: str):
+        """Add a persistent word or phrase to the automatic abuse filter."""
+        normalized = normalize_custom_abuse_term(term)
+        if len(normalized.replace(" ", "")) < 2:
+            raise commands.BadArgument("Enter at least two letters or numbers.")
+        if len(normalized) > 100:
+            raise commands.BadArgument("Abuse-filter entries cannot exceed 100 characters.")
+        if contains_abusive_language(normalized):
+            return await ctx.send(
+                embed=discord.Embed(
+                    title="Already covered",
+                    description=f"`{normalized}` is already covered by the built-in filter.",
+                    color=self.bot.error_color,
+                )
+            )
+
+        terms = self._custom_abuse_terms()
+        if normalized in terms:
+            return await ctx.send(
+                embed=discord.Embed(
+                    title="Already added",
+                    description=f"`{normalized}` is already in the custom abuse-word list.",
+                    color=self.bot.error_color,
+                )
+            )
+        if len(terms) >= 100:
+            raise commands.BadArgument("The custom abuse-word list is limited to 100 entries.")
+
+        terms.append(normalized)
+        self.bot.config["abuse_filter_extra_terms"] = sorted(terms)
+        await self.bot.config.update()
+        await ctx.send(
+            embed=discord.Embed(
+                title="Added abuse-filter entry",
+                description=(
+                    f"`{normalized}` will now automatically trigger the warning and close "
+                    "the ticket."
+                ),
+                color=self.bot.main_color,
+            )
+        )
+
+    @abuseword.command(name="remove", aliases=["delete", "del"])
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def abuseword_remove(self, ctx, *, term: str):
+        """Remove a word or phrase from the custom automatic abuse filter."""
+        normalized = normalize_custom_abuse_term(term)
+        terms = self._custom_abuse_terms()
+        if normalized not in terms:
+            return await ctx.send(
+                embed=create_not_found_embed(
+                    normalized or term,
+                    terms,
+                    "Custom abuse-filter entry",
+                )
+            )
+
+        terms.remove(normalized)
+        self.bot.config["abuse_filter_extra_terms"] = terms
+        await self.bot.config.update()
+        await ctx.send(
+            embed=discord.Embed(
+                title="Removed abuse-filter entry",
+                description=f"`{normalized}` is no longer in the custom abuse-word list.",
+                color=self.bot.main_color,
+            )
+        )
+
+    @abuseword.command(name="list")
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def abuseword_list(self, ctx):
+        """List all administrator-added abuse words and phrases."""
+        terms = self._custom_abuse_terms()
+        if not terms:
+            return await ctx.send(
+                embed=discord.Embed(
+                    title="Custom abuse-filter entries",
+                    description=(
+                        "No custom entries are configured. The built-in list is still active."
+                    ),
+                    color=self.bot.main_color,
+                )
+            )
+
+        embeds = []
+        for offset in range(0, len(terms), 25):
+            chunk = terms[offset : offset + 25]
+            description = "\n".join(
+                f"{index}. `{term}`"
+                for index, term in enumerate(chunk, start=offset + 1)
+            )
+            embeds.append(
+                discord.Embed(
+                    title=f"Custom abuse-filter entries ({len(terms)}/100)",
+                    description=description,
+                    color=self.bot.main_color,
+                )
+            )
+        return await EmbedPaginatorSession(ctx, *embeds).run()
 
     @commands.command(usage="<category> [options]")
     @checks.has_permissions(PermissionLevel.MODERATOR)
@@ -2158,6 +2297,15 @@ class Modmail(commands.Cog):
             value=(
                 '`"context MESSAGE"` — Post plain staff-only context in the ticket.\n'
                 '`"notify @role"` — Immediately ping a role in the staff ticket.'
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Automatic abuse filter — Administrator",
+            value=(
+                f"`{prefix}abuseword add WORD OR PHRASE` — Add a persistent custom entry.\n"
+                f"`{prefix}abuseword remove WORD OR PHRASE` — Remove a custom entry.\n"
+                f"`{prefix}abuseword list` — List custom entries."
             ),
             inline=False,
         )

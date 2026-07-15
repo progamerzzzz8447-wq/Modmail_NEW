@@ -1,6 +1,10 @@
 import unittest
 
-from core.abuse_filter import ABUSE_AUTO_CLOSE_MESSAGE, contains_abusive_language
+from core.abuse_filter import (
+    ABUSE_AUTO_CLOSE_MESSAGE,
+    contains_abusive_language,
+    normalize_custom_abuse_term,
+)
 
 
 class AbuseFilterTests(unittest.TestCase):
@@ -42,6 +46,21 @@ class AbuseFilterTests(unittest.TestCase):
             "has now been automatically closed.\n\n"
             "You may open a new ticket if you still require assistance. However, any further "
             "abusive behaviour will result in you being blocked from contacting support.",
+        )
+
+    def test_normalizes_and_matches_administrator_added_words_and_phrases(self):
+        self.assertEqual(normalize_custom_abuse_term('  "Bad-Phrase!"  '), "bad phrase")
+        self.assertTrue(
+            contains_abusive_language(
+                "That was a b@d---phr@se.",
+                extra_terms=["bad phrase"],
+            )
+        )
+        self.assertTrue(
+            contains_abusive_language("CUSTOMWORD", extra_terms=["customword"])
+        )
+        self.assertFalse(
+            contains_abusive_language("custom wording", extra_terms=["customword"])
         )
 
 

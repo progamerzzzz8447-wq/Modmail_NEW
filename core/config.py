@@ -186,6 +186,7 @@ class ConfigManager:
         "blocked": {},
         "blocked_roles": {},
         "blocked_whitelist": [],
+        "abuse_filter_extra_terms": [],
         "command_permissions": {},
         "level_permissions": {},
         "override_command_level": {},

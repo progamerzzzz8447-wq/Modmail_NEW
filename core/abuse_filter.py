@@ -1,3 +1,4 @@
+from functools import lru_cache
 import re
 import typing
 
@@ -27,6 +28,24 @@ def _obfuscated_word(word: str) -> str:
         for character in word
     ]
     return r"(?<![a-z0-9])" + r"[\W_]*".join(letters) + r"(?![a-z0-9])"
+
+
+def normalize_custom_abuse_term(term: str) -> str:
+    """Normalize an administrator-supplied plain word or phrase for storage and matching."""
+    words = re.findall(r"[^\W_]+", str(term or "").casefold(), re.UNICODE)
+    return " ".join(words)
+
+
+@lru_cache(maxsize=64)
+def _compile_custom_patterns(terms: typing.Tuple[str, ...]) -> typing.Tuple[re.Pattern, ...]:
+    patterns = []
+    for term in terms:
+        words = term.split()
+        if not words:
+            continue
+        phrase_pattern = r"[\W_]+".join(_obfuscated_word(word) for word in words)
+        patterns.append(re.compile(phrase_pattern, re.IGNORECASE))
+    return tuple(patterns)
 
 
 # Keep short or ambiguous profanity out of this list. These patterns are reserved for the
@@ -67,7 +86,26 @@ _ABUSE_PATTERNS: typing.Tuple[re.Pattern, ...] = tuple(
 )
 
 
-def contains_abusive_language(text: str) -> bool:
-    """Return whether text contains a whole blocked term or common obfuscated form."""
+def contains_abusive_language(
+    text: str,
+    *,
+    extra_terms: typing.Iterable[str] = (),
+) -> bool:
+    """Return whether text contains a built-in or administrator-added blocked term."""
     value = str(text or "")
-    return any(pattern.search(value) is not None for pattern in _ABUSE_PATTERNS)
+    if any(pattern.search(value) is not None for pattern in _ABUSE_PATTERNS):
+        return True
+
+    if isinstance(extra_terms, str):
+        extra_terms = (extra_terms,)
+    normalized_terms = tuple(
+        dict.fromkeys(
+            normalized
+            for normalized in (normalize_custom_abuse_term(term) for term in extra_terms)
+            if normalized
+        )
+    )
+    return any(
+        pattern.search(value) is not None
+        for pattern in _compile_custom_patterns(normalized_terms)
+    )

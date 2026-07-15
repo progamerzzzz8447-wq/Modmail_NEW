@@ -987,7 +987,10 @@ class Thread:
 
     def contains_abusive_message(self, message) -> bool:
         """Return whether a recipient message should trigger the automatic abuse close."""
-        return message is not None and contains_abusive_language(self._ai_ticket_text(message))
+        return message is not None and contains_abusive_language(
+            self._ai_ticket_text(message),
+            extra_terms=self.bot.config.get("abuse_filter_extra_terms") or (),
+        )
 
     async def auto_close_for_abuse(self, message) -> bool:
         """Relay the approved abuse warning, log it, and close a matching ticket once."""
