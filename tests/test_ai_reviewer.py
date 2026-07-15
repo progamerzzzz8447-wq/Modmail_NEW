@@ -11,10 +11,14 @@ from core.ai_reviewer import (
     GeminiAnnoyReplyGenerator,
     GeminiAutoReplyReviewer,
     GeminiHelpfulReplyGenerator,
+    GeminiLearningSummaryGenerator,
     GeminiTicketSummaryGenerator,
+    NO_REUSABLE_LEARNING,
+    build_learning_transcript,
     build_ticket_text,
     describe_ai_error,
     finalize_generated_ai_reply,
+    find_command_references,
     generate_ai_message_joint_id,
     has_application_trigger,
     has_configured_trigger,
@@ -59,6 +63,47 @@ def generate_content_output(value):
 
 
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
+    def test_learning_transcript_excludes_bot_output_and_internal_staff_notes(self):
+        transcript, staff_count = build_learning_transcript(
+            {
+                "messages": [
+                    {
+                        "author": {"id": "1", "mod": False},
+                        "type": "thread_message",
+                        "content": "How do I fix this?",
+                    },
+                    {
+                        "author": {"id": "2", "mod": True},
+                        "type": "thread_message",
+                        "content": "Rejoin the game after purchasing.",
+                    },
+                    {
+                        "author": {"id": "2", "mod": True},
+                        "type": "internal",
+                        "content": "Private staff speculation.",
+                    },
+                    {
+                        "author": {"id": "999", "mod": True},
+                        "type": "thread_message",
+                        "content": "Bot-generated answer.",
+                    },
+                ]
+            },
+            bot_user_id=999,
+        )
+
+        self.assertEqual(staff_count, 1)
+        self.assertIn("How do I fix this?", transcript)
+        self.assertIn("Rejoin the game after purchasing.", transcript)
+        self.assertNotIn("Private staff speculation", transcript)
+        self.assertNotIn("Bot-generated answer", transcript)
+
+    def test_extracts_generated_discord_command_references(self):
+        self.assertEqual(
+            find_command_references("Use ?apply or ?ApplyStatus, but why?"),
+            {"apply", "applystatus"},
+        )
+
     def test_roblox_game_pass_url_matches_anywhere_in_message(self):
         self.assertTrue(
             has_roblox_game_pass_url(
@@ -163,7 +208,49 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("My booking is missing.", prompt)
         self.assertIn("Can I help with anything else?", prompt)
 
+    async def test_helpful_reply_receives_owner_approved_learning_context(self):
+        session = FakeSession(
+            FakeResponse(200, generate_content_output({"reply": "Please rejoin the game."}))
+        )
+        generator = GeminiHelpfulReplyGenerator(session, "test-key")
+
+        await generator.generate(
+            "[time] Recipient\nThe pass is not showing.",
+            approved_knowledge="Users should rejoin after purchasing a pass.",
+        )
+
+        _, request = session.request
+        prompt = request["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("APPROVED AI LEARNING STORAGE KNOWLEDGE", prompt)
+        self.assertIn("Users should rejoin after purchasing a pass.", prompt)
+
+    async def test_learning_generator_extracts_reusable_staff_knowledge(self):
+        session = FakeSession(
+            FakeResponse(
+                200,
+                generate_content_output(
+                    {"reply": "- Rejoin the game after purchasing a gamepass."}
+                ),
+            )
+        )
+        generator = GeminiLearningSummaryGenerator(session, "test-key")
+
+        summary = await generator.generate(
+            "[RECIPIENT CONTEXT (UNTRUSTED)]\nIt broke.\n\n"
+            "[HUMAN STAFF REPLY]\nRejoin after purchasing."
+        )
+
+        self.assertEqual(summary, "- Rejoin the game after purchasing a gamepass.")
+        _, request = session.request
+        prompt = request["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("Learn only from blocks labelled HUMAN STAFF REPLY", prompt)
+        self.assertIn(NO_REUSABLE_LEARNING, prompt)
+
     def test_tui_support_policy_covers_required_evidence_and_capability_limits(self):
+        self.assertIn("Roblox and Discord community", TUI_SUPPORT_ASSISTANT_POLICY)
+        self.assertIn("Never introduce or request a flight number", TUI_SUPPORT_ASSISTANT_POLICY)
+        self.assertIn("possible usernames, Roblox terms, typos", TUI_SUPPORT_ASSISTANT_POLICY)
+        self.assertIn("Never invent or suggest Discord bot commands", TUI_SUPPORT_ASSISTANT_POLICY)
         self.assertIn("flight schedules or routes", TUI_SUPPORT_ASSISTANT_POLICY)
         self.assertIn("application status, results", TUI_SUPPORT_ASSISTANT_POLICY)
         self.assertIn("gamepass ownership", TUI_SUPPORT_ASSISTANT_POLICY)
