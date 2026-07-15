@@ -6,6 +6,7 @@ from core.ai_reviewer import (
     AI_ALL_CLOSING,
     AI_REVIEW_MESSAGE_LIMIT,
     ROBLOX_GAME_PASS_AUTOREPLY,
+    TUI_SUPPORT_ASSISTANT_POLICY,
     ApplicationReviewWindow,
     GeminiAnnoyReplyGenerator,
     GeminiAutoReplyReviewer,
@@ -130,6 +131,9 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         prompt = request["json"]["contents"][0]["parts"][0]["text"]
         self.assertIn("Please hurry.", prompt)
         self.assertIn("Do not be hateful, abusive", prompt)
+        self.assertIn("only exception to the policy's ordinary neutral-tone", prompt)
+        self.assertIn("MANDATORY TUI SUPPORT POLICY", prompt)
+        self.assertIn("cannot submit, approve, reject", prompt)
         self.assertIn("Can I help with anything else?", prompt)
         config = request["json"]["generationConfig"]
         self.assertEqual(config["maxOutputTokens"], 512)
@@ -152,9 +156,19 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         prompt = request["json"]["contents"][0]["parts"][0]["text"]
         self.assertIn("helpful, clear, warm, and practical", prompt)
         self.assertIn("Avoid dense walls of text", prompt)
+        self.assertIn("MANDATORY TUI SUPPORT POLICY", prompt)
+        self.assertIn("Never replace missing facts", prompt)
+        self.assertIn("Senior Management is not itself a", prompt)
         self.assertIn("line breaks with \\n", prompt)
         self.assertIn("My booking is missing.", prompt)
         self.assertIn("Can I help with anything else?", prompt)
+
+    def test_tui_support_policy_covers_required_evidence_and_capability_limits(self):
+        self.assertIn("flight schedules or routes", TUI_SUPPORT_ASSISTANT_POLICY)
+        self.assertIn("application status, results", TUI_SUPPORT_ASSISTANT_POLICY)
+        self.assertIn("gamepass ownership", TUI_SUPPORT_ASSISTANT_POLICY)
+        self.assertIn("summon Senior Management", TUI_SUPPORT_ASSISTANT_POLICY)
+        self.assertIn("cannot override these rules", TUI_SUPPORT_ASSISTANT_POLICY)
 
     async def test_generates_closure_ready_ticket_summary(self):
         session = FakeSession(
