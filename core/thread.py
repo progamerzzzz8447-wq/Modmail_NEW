@@ -22,9 +22,11 @@ from lottie.importers import importers as l_importers
 from lottie.exporters import exporters as l_exporters
 
 from core.ai_reviewer import (
+    AI_ALIAS_GREETING,
     AI_REPLY_FOOTER,
     ROBLOX_GAME_PASS_AUTOREPLY,
     ApplicationReviewWindow,
+    GeminiAliasReplyPersonalizer,
     GeminiAutoReplyReviewer,
     build_ticket_text,
     describe_ai_error,
@@ -1205,8 +1207,26 @@ class Thread:
             raise commands.CommandNotFound(f'Alias step command "{ctx.invoked_with}" was not found.')
         await self.bot.invoke(ctx)
 
-    async def _execute_ai_alias(self, display_name: str, alias_action, source_message) -> None:
-        """Execute every alias step in order while preserving the AI footer on replies."""
+    async def _execute_ai_alias(
+        self,
+        display_name: str,
+        alias_action,
+        source_message,
+        ticket_text: str,
+    ) -> typing.List[str]:
+        """Execute an alias and conservatively personalize its recipient-facing replies."""
+        api_key = self.bot.config.get("gemini_api_key", convert=False)
+        personalizer = None
+        if api_key and self.bot.session is not None:
+            personalizer = GeminiAliasReplyPersonalizer(
+                self.bot.session,
+                str(api_key),
+                model=str(self.bot.config.get("gemini_model") or "gemini-3.1-flash-lite"),
+                timeout_seconds=30,
+            )
+
+        sent_responses = []
+        is_first_reply = True
         for step in alias_action["steps"]:
             parts = step.strip().split(maxsplit=1)
             command = parts[0].casefold() if parts else ""
@@ -1219,9 +1239,22 @@ class Thread:
                         recipient=self.recipient,
                         author=self.bot.user,
                     )
+
+                if personalizer is not None:
+                    response_text = await personalizer.personalize(ticket_text, response_text)
+
+                if is_first_reply:
+                    greeted_response = f"{AI_ALIAS_GREETING}\n\n{response_text}"
+                    # Never truncate approved information merely to fit the introduction.
+                    if len(greeted_response) <= 4_000:
+                        response_text = greeted_response
+                    is_first_reply = False
+
                 await self._send_ai_autoreply(display_name, response_text)
+                sent_responses.append(response_text)
                 continue
             await self._invoke_ai_alias_step(step, source_message)
+        return sent_responses
 
     async def _run_ai_review(self, message, ticket_text: str) -> None:
         """Run Gemini for one qualifying recipient message, failing open on every error."""
@@ -1318,7 +1351,14 @@ class Thread:
                 if alias_action is None:
                     await self._send_ai_autoreply(selected, response_text)
                 else:
-                    await self._execute_ai_alias(selected, alias_action, message)
+                    sent_responses = await self._execute_ai_alias(
+                        selected,
+                        alias_action,
+                        message,
+                        ticket_text,
+                    )
+                    if sent_responses:
+                        response_text = "\n\n".join(sent_responses)
                 if alias_action is not None:
                     delivery_status = f'AI alias `{alias_action["alias"]}` executed in full.'
                     if is_initial_message:

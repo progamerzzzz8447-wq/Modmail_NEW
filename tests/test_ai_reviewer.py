@@ -3,17 +3,20 @@ import unittest
 from types import SimpleNamespace
 
 from core.ai_reviewer import (
+    AI_ALIAS_GREETING,
     AI_ALL_CLOSING,
     AI_REVIEW_MESSAGE_LIMIT,
     ROBLOX_GAME_PASS_AUTOREPLY,
     TUI_SUPPORT_ASSISTANT_POLICY,
     ApplicationReviewWindow,
+    GeminiAliasReplyPersonalizer,
     GeminiAnnoyReplyGenerator,
     GeminiAutoReplyReviewer,
     GeminiHelpfulReplyGenerator,
     GeminiLearningSummaryGenerator,
     GeminiTicketSummaryGenerator,
     NO_REUSABLE_LEARNING,
+    alias_rewrite_preserves_information,
     build_learning_transcript,
     build_ticket_text,
     describe_ai_error,
@@ -103,6 +106,72 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             find_command_references("Use ?apply or ?ApplyStatus, but why?"),
             {"apply", "applystatus"},
         )
+
+    def test_alias_rewrite_validation_preserves_protected_information(self):
+        approved = (
+            "Please use ?apply at https://example.com. Applicants must be 13 or older "
+            "and notify <@&1391515982417100951>."
+        )
+        safe_reordering = (
+            "Applicants must be 13 or older and notify <@&1391515982417100951>. "
+            "Please use ?apply at https://example.com."
+        )
+
+        self.assertTrue(alias_rewrite_preserves_information(approved, safe_reordering))
+        self.assertFalse(
+            alias_rewrite_preserves_information(
+                approved,
+                "Please use ?apply to submit an application.",
+            )
+        )
+        self.assertFalse(
+            alias_rewrite_preserves_information(
+                "Applications are open.",
+                "Applications are closed.",
+            )
+        )
+        self.assertIn("I’m the AI support assistant", AI_ALIAS_GREETING)
+        self.assertIn("human assistance", AI_ALIAS_GREETING)
+
+    async def test_alias_personalizer_uses_strict_prompt_and_larger_output_limit(self):
+        approved = (
+            "Please use ?apply at https://example.com. Applicants must be 13 or older."
+        )
+        rewritten = (
+            "Applicants must be 13 or older. Please use ?apply at https://example.com."
+        )
+        session = FakeSession(
+            FakeResponse(200, generate_content_output({"reply": rewritten}))
+        )
+        personalizer = GeminiAliasReplyPersonalizer(session, "test-key")
+
+        reply = await personalizer.personalize("How can I apply?", approved)
+
+        self.assertEqual(reply, rewritten)
+        _, request = session.request
+        prompt = request["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("approved reply is the sole factual source", prompt)
+        self.assertIn("Do not add a greeting", prompt)
+        self.assertIn('"ticket_request": "How can I apply?"', prompt)
+        self.assertEqual(request["json"]["generationConfig"]["maxOutputTokens"], 2_048)
+
+    async def test_alias_personalizer_falls_back_to_exact_approved_reply(self):
+        approved = (
+            "Please use ?apply at https://example.com. Applicants must be 13 or older."
+        )
+        session = FakeSession(
+            FakeResponse(
+                200,
+                generate_content_output({"reply": "Just complete the application form."}),
+            )
+        )
+        personalizer = GeminiAliasReplyPersonalizer(session, "test-key")
+
+        reply = await personalizer.personalize("How can I apply?", approved)
+
+        self.assertEqual(reply, approved)
+        self.assertEqual(personalizer.last_outcome, "rewrite_fallback")
+        self.assertIn("exact approved alias", personalizer.last_detail)
 
     def test_roblox_game_pass_url_matches_anywhere_in_message(self):
         self.assertTrue(
