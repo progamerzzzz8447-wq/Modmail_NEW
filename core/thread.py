@@ -23,6 +23,7 @@ from lottie.exporters import exporters as l_exporters
 
 from core.ai_reviewer import (
     AI_REPLY_FOOTER,
+    ROBLOX_GAME_PASS_AUTOREPLY,
     ApplicationReviewWindow,
     GeminiAutoReplyReviewer,
     build_ticket_text,
@@ -30,6 +31,7 @@ from core.ai_reviewer import (
     generate_ai_message_joint_id,
     has_application_trigger,
     has_configured_trigger,
+    has_roblox_game_pass_url,
 )
 from core.alias_parser import (
     FORMATTED_AI_REPLY_COMMANDS,
@@ -982,18 +984,24 @@ class Thread:
         return ticket_text
 
     async def consider_ai_autoreply(self, message) -> None:
-        """Review at most once when any recipient message contains a configured trigger."""
+        """Run deterministic and Gemini autoreplies for qualifying recipient messages."""
         if message is None:
             return
 
         async with self._ai_review_lock:
-            if self._ai_review_completed:
-                return
             if not self.bot.config.get("gemini_ai_enabled"):
                 self._ai_review_completed = True
                 return
 
             ticket_text = self._ai_ticket_text(message)
+            if has_roblox_game_pass_url(ticket_text):
+                # This system rule has its own durable type claim and therefore
+                # remains eligible even if the ticket's one Gemini check has run.
+                await self._run_roblox_game_pass_autoreply(message, ticket_text)
+                return
+
+            if self._ai_review_completed:
+                return
             if not self._ai_review_window.consider(
                 ticket_text,
                 triggered=self._matches_ai_autoreply_trigger(ticket_text),
@@ -1005,6 +1013,79 @@ class Thread:
             # regardless of the outcome or whether an autoreply matches.
             self._ai_review_completed = True
             await self._run_ai_review(message, ticket_text)
+
+    async def _run_roblox_game_pass_autoreply(self, message, ticket_text: str) -> None:
+        """Send the fixed game-pass guidance once per ticket without calling Gemini."""
+        selected_name = "Roblox game-pass link"
+        autoreply_type = "system:roblox-game-pass-url"
+        is_initial_message = self._initial_message_id == getattr(message, "id", None)
+
+        try:
+            claimed = await self.bot.api.claim_ai_autoreply(
+                self.channel.id,
+                autoreply_type,
+                selected_name,
+            )
+        except Exception as exc:
+            error_detail = describe_ai_error(exc)
+            logger.error(
+                "Roblox game-pass autoreply blocked because its duplicate guard failed: %s",
+                error_detail,
+                exc_info=True,
+            )
+            await self._log_ai_check(
+                message,
+                ticket_text,
+                outcome="duplicate_guard_error",
+                detail=(
+                    "The Roblox game-pass URL matched, but the durable duplicate guard failed "
+                    f"({error_detail})."
+                ),
+                selected_name=selected_name,
+                delivery_status="No automatic game-pass reply was sent.",
+            )
+            return
+
+        if not claimed:
+            await self._log_ai_check(
+                message,
+                ticket_text,
+                outcome="duplicate_suppressed",
+                detail="The Roblox game-pass autoreply was already sent in this ticket.",
+                selected_name=selected_name,
+                delivery_status="Duplicate suppressed; no AI reply was sent.",
+            )
+            return
+
+        delivery_error = None
+        try:
+            await self._send_ai_autoreply(selected_name, ROBLOX_GAME_PASS_AUTOREPLY)
+            delivery_status = (
+                "Automatic game-pass guidance delivered after the connected ticket-opened message."
+                if is_initial_message
+                else "Automatic game-pass guidance delivered after a recipient message."
+            )
+        except Exception as exc:
+            delivery_error = exc
+            error_detail = describe_ai_error(exc)
+            delivery_status = f"Automatic game-pass reply delivery failed ({error_detail})."
+            logger.error(
+                "Roblox game-pass autoreply delivery failed: %s",
+                error_detail,
+                exc_info=True,
+            )
+
+        await self._log_ai_check(
+            message,
+            ticket_text,
+            outcome="matched" if delivery_error is None else "delivery_error",
+            detail="Matched the fixed Roblox game-pass URL rule; Gemini was not called.",
+            selected_name=selected_name,
+            response_text=ROBLOX_GAME_PASS_AUTOREPLY,
+            delivery_status=delivery_status,
+        )
+        if delivery_error is not None:
+            raise delivery_error
 
     def _matches_ai_autoreply_trigger(self, ticket_text: str) -> bool:
         """Check legacy application wording and per-rule must-mention terms."""

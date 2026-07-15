@@ -22,6 +22,14 @@ AI_REPLY_FOOTER = (
     "This reply is AI generated. If you require further assistance, please reply to this message"
 )
 AI_REPLY_CLOSING = "Can I help with anything else?"
+ROBLOX_GAME_PASS_URL = "https://www.roblox.com/game-pass/"
+ROBLOX_GAME_PASS_AUTOREPLY = (
+    "**This is an automated reply and may not apply to your specific case.**\n\n"
+    "Please ensure the game pass is associated with a **published** game and that the "
+    "**Maturity Questionnaire** has been completed for that experience. Once this has been "
+    "done, please send us the link to the game so we can send the payment. A human "
+    "representative will assist shortly."
+)
 
 
 def normalize_generated_reply_layout(response: str) -> str:
@@ -32,6 +40,11 @@ def normalize_generated_reply_layout(response: str) -> str:
     response = response.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
     response = response.replace("\r\n", "\n").replace("\r", "\n")
     return response.strip()
+
+
+def has_roblox_game_pass_url(text: str) -> bool:
+    """Return whether a recipient message contains the Roblox game-pass URL."""
+    return ROBLOX_GAME_PASS_URL in str(text or "").casefold()
 
 
 def finalize_generated_ai_reply(

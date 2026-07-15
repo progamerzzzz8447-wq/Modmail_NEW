@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from core.ai_reviewer import (
     AI_REVIEW_MESSAGE_LIMIT,
+    ROBLOX_GAME_PASS_AUTOREPLY,
     ApplicationReviewWindow,
     GeminiAnnoyReplyGenerator,
     GeminiAutoReplyReviewer,
@@ -14,6 +15,7 @@ from core.ai_reviewer import (
     generate_ai_message_joint_id,
     has_application_trigger,
     has_configured_trigger,
+    has_roblox_game_pass_url,
 )
 
 
@@ -54,6 +56,19 @@ def generate_content_output(value):
 
 
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
+    def test_roblox_game_pass_url_matches_anywhere_in_message(self):
+        self.assertTrue(
+            has_roblox_game_pass_url(
+                "Here it is: https://www.roblox.com/game-pass/12345/example please check it"
+            )
+        )
+        self.assertTrue(
+            has_roblox_game_pass_url("<HTTPS://WWW.ROBLOX.COM/GAME-PASS/12345>")
+        )
+        self.assertFalse(has_roblox_game_pass_url("https://www.roblox.com/games/12345"))
+        self.assertIn("**published**", ROBLOX_GAME_PASS_AUTOREPLY)
+        self.assertIn("**Maturity Questionnaire**", ROBLOX_GAME_PASS_AUTOREPLY)
+
     def test_confirmed_ai_reply_omits_standard_closing(self):
         self.assertEqual(
             finalize_generated_ai_reply("Helpful answer", include_closing=False),
