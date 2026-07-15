@@ -2054,6 +2054,66 @@ class Modmail(commands.Cog):
     @commands.command()
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
+    async def aicommands(self, ctx):
+        """Show the available manual AI commands and autoreply management syntax."""
+        prefix = self.bot.prefix
+        embed = discord.Embed(
+            title="AI command guide",
+            description=(
+                "Commands for generating replies, preparing staff-only drafts, and managing "
+                "automatic ticket responses."
+            ),
+            color=self.bot.main_color,
+        )
+        embed.add_field(
+            name="Generate and send",
+            value=(
+                f"`{prefix}aireply` — Generate and send a helpful response.\n"
+                f"`{prefix}aireply CONFIRM` — Send a helpful response without the "
+                "“Can I help with anything else?” line.\n"
+                f"`{prefix}aiall` — Summarize the resolved ticket and send the closure warning.\n"
+                f"`{prefix}annoyautoreply` — Generate and send the sarcastic response.\n"
+                f"`{prefix}fakeautoreply MESSAGE` — Send your own text using the AI presentation."
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Staff-only raw drafts",
+            value=(
+                f"`{prefix}aireply raw` — Generate a helpful copyable draft without sending it.\n"
+                f"`{prefix}aiall raw` — Generate a closure-ready copyable summary without sending it."
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Automatic autoreplies — Administrator",
+            value=(
+                f"`{prefix}autoreply` — List all configured rules.\n"
+                f"`{prefix}autoreply KEYWORD` — View one rule and its alternatives.\n"
+                f"`{prefix}autoreply KEYWORD raw` — Get a copyable edit command.\n"
+                f"`{prefix}autoreply create \"NAME: …\" "
+                "[\"MUST MENTION TO CHECK\": …] ALIAS` — Create a rule.\n"
+                f"`{prefix}autoreply edit …` — Update a rule, including `ALTERNATIVES`.\n"
+                f"`{prefix}autoreply remove KEYWORD` — Delete a rule."
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="AI-message cleanup",
+            value=(
+                f"`{prefix}delete` — Delete the latest linked reply.\n"
+                f"`{prefix}delete MESSAGE_ID` — Delete a specific linked AI/staff reply."
+            ),
+            inline=False,
+        )
+        embed.set_footer(
+            text="Fully automatic ticket checks and URL responses run without a command."
+        )
+        return await ctx.send(embed=embed)
+
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def aireply(self, ctx, mode: str = None):
         """Generate and send a helpful AI response using the complete thread history."""
