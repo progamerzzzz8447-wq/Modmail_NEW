@@ -1,7 +1,7 @@
 {
   "gemini_ai_enabled": {
     "default": "Yes",
-    "description": "Scans every recipient message for configured wording, then uses Gemini at most once per ticket to select a relevant configured `{prefix}autoreply` message.",
+    "description": "Scans every recipient message for configured wording, then uses Gemini to select a relevant configured `{prefix}autoreply` message that has not already been sent in that ticket.",
     "examples": [
       "`{prefix}config set gemini_ai_enabled yes`",
       "`{prefix}config set gemini_ai_enabled no`"
@@ -9,7 +9,8 @@
     "notes": [
       "Requires the `GEMINI_API_KEY` environment variable and at least one configured `{prefix}autoreply`.",
       "Gemini selects an existing set message or a configured reply/freply alias; it does not compose the reply.",
-      "Alias-backed rules call Gemini when any recipient message contains a configured must-mention word or phrase; only the first qualifying message can trigger a ticket."
+      "Alias-backed rules call Gemini whenever a recipient message contains a configured must-mention word or phrase.",
+      "Each autoreply or alias type can be sent only once per ticket, but different types may respond later in the same ticket."
     ]
   },
   "gemini_model": {

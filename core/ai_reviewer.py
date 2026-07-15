@@ -17,7 +17,6 @@ GEMINI_GENERATE_CONTENT_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
 NO_MATCH = "__NO_MATCH__"
-AI_REVIEW_MESSAGE_LIMIT = None
 AI_REPLY_FOOTER = (
     "This reply is AI generated. If you require further assistance, please reply to this message"
 )
@@ -132,6 +131,20 @@ def describe_ai_error(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
 
 
+def normalize_ai_autoreply_type(value: str) -> str:
+    """Normalize the durable identity used to suppress one autoreply type per ticket."""
+    return " ".join(str(value or "").casefold().split())
+
+
+def resolve_ai_autoreply_type(
+    selected_name: str,
+    alias_action: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+) -> str:
+    """Use an alias name as its type, otherwise use the configured reply name."""
+    value = alias_action.get("alias") if alias_action is not None else selected_name
+    return normalize_ai_autoreply_type(value)
+
+
 async def claim_ai_autoreply_once(
     logs: typing.Any,
     channel_id: typing.Union[int, str],
@@ -142,7 +155,7 @@ async def claim_ai_autoreply_once(
 ) -> bool:
     """Atomically and durably reserve one autoreply type for a ticket."""
     channel_id = str(channel_id)
-    autoreply_type = " ".join(str(autoreply_type).casefold().split())
+    autoreply_type = normalize_ai_autoreply_type(autoreply_type)
     if not autoreply_type:
         raise ValueError("An AI autoreply type is required.")
 
@@ -233,29 +246,6 @@ def has_configured_trigger(text: str, trigger_terms: typing.Iterable[str]) -> bo
         ):
             return True
     return False
-
-
-class ApplicationReviewWindow:
-    """Keep recipient messages eligible until one triggers the ticket's AI check."""
-
-    def __init__(self, limit: typing.Optional[int] = AI_REVIEW_MESSAGE_LIMIT):
-        self.limit = max(int(limit), 1) if limit is not None else None
-        self.messages_seen = 0
-        self.closed = False
-
-    def consider(self, text: str, *, triggered: typing.Optional[bool] = None) -> bool:
-        """Return True once for the first qualifying recipient message."""
-        if self.closed:
-            return False
-
-        self.messages_seen += 1
-        is_triggered = triggered if triggered is not None else has_application_trigger(text)
-        if is_triggered:
-            self.closed = True
-            return True
-        if self.limit is not None and self.messages_seen >= self.limit:
-            self.closed = True
-        return False
 
 
 def build_ticket_text(message, *, max_chars: int = 12_000) -> str:

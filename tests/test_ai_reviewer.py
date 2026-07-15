@@ -4,10 +4,8 @@ from types import SimpleNamespace
 
 from core.ai_reviewer import (
     AI_ALL_CLOSING,
-    AI_REVIEW_MESSAGE_LIMIT,
     ROBLOX_GAME_PASS_AUTOREPLY,
     TUI_SUPPORT_ASSISTANT_POLICY,
-    ApplicationReviewWindow,
     GeminiAnnoyReplyGenerator,
     GeminiAutoReplyReviewer,
     GeminiHelpfulReplyGenerator,
@@ -20,6 +18,7 @@ from core.ai_reviewer import (
     has_application_trigger,
     has_configured_trigger,
     has_roblox_game_pass_url,
+    resolve_ai_autoreply_type,
 )
 
 
@@ -64,6 +63,16 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             find_command_references("Use ?apply or ?ApplyStatus, but why?"),
             {"apply", "applystatus"},
+        )
+
+    def test_resolves_distinct_durable_autoreply_types(self):
+        self.assertEqual(resolve_ai_autoreply_type("Application Help"), "application help")
+        self.assertEqual(
+            resolve_ai_autoreply_type(
+                "Application Help",
+                {"alias": "  APPLY-ALIAS  "},
+            ),
+            "apply-alias",
         )
 
     def test_roblox_game_pass_url_matches_anywhere_in_message(self):
@@ -346,24 +355,6 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertFalse(has_configured_trigger("The staffing level is fine.", ["staff"]))
-        self.assertIsNone(AI_REVIEW_MESSAGE_LIMIT)
-
-    def test_application_review_window_stays_open_until_first_trigger(self):
-        window = ApplicationReviewWindow()
-
-        for index in range(100):
-            self.assertFalse(window.consider(f"Unrelated message {index}"))
-        self.assertFalse(window.closed)
-        self.assertTrue(window.consider("How can I apply?"))
-        self.assertTrue(window.closed)
-        self.assertEqual(window.messages_seen, 101)
-        self.assertFalse(window.consider("Another application question"))
-
-        limited = ApplicationReviewWindow(limit=4)
-        for text in ("one", "two", "three", "four"):
-            self.assertFalse(limited.consider(text))
-        self.assertTrue(limited.closed)
-        self.assertFalse(limited.consider("I want a job"))
 
 
 if __name__ == "__main__":

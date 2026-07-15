@@ -25,7 +25,6 @@ from core.abuse_filter import ABUSE_AUTO_CLOSE_MESSAGE, contains_abusive_languag
 from core.ai_reviewer import (
     AI_REPLY_FOOTER,
     ROBLOX_GAME_PASS_AUTOREPLY,
-    ApplicationReviewWindow,
     GeminiAutoReplyReviewer,
     build_ticket_text,
     describe_ai_error,
@@ -33,6 +32,7 @@ from core.ai_reviewer import (
     has_application_trigger,
     has_configured_trigger,
     has_roblox_game_pass_url,
+    resolve_ai_autoreply_type,
 )
 from core.alias_parser import (
     FORMATTED_AI_REPLY_COMMANDS,
@@ -93,8 +93,6 @@ class Thread:
         self._dm_menu_msg_id = None
         self._dm_menu_channel_id = None
         self._initial_message_id = None
-        self._ai_review_completed = False
-        self._ai_review_window = ApplicationReviewWindow()
         self._ai_review_lock = asyncio.Lock()
         self._abuse_close_lock = asyncio.Lock()
         # --- SNOOZE STATE ---
@@ -1047,28 +1045,18 @@ class Thread:
 
         async with self._ai_review_lock:
             if not self.bot.config.get("gemini_ai_enabled"):
-                self._ai_review_completed = True
                 return
 
             ticket_text = self._ai_ticket_text(message)
             if has_roblox_game_pass_url(ticket_text):
-                # This system rule has its own durable type claim and therefore
-                # remains eligible even if the ticket's one Gemini check has run.
+                # This system rule has its own durable type claim. Continue afterward so the same
+                # message may also receive a different configured autoreply when relevant.
                 await self._run_roblox_game_pass_autoreply(message, ticket_text)
-                return
 
-            if self._ai_review_completed:
+            # Every qualifying recipient message may select a different configured type. The
+            # database-backed claim in _run_ai_review still suppresses each type permanently.
+            if not self._matches_ai_autoreply_trigger(ticket_text):
                 return
-            if not self._ai_review_window.consider(
-                ticket_text,
-                triggered=self._matches_ai_autoreply_trigger(ticket_text),
-            ):
-                self._ai_review_completed = self._ai_review_window.closed
-                return
-
-            # A qualifying message consumes the ticket's single Gemini check,
-            # regardless of the outcome or whether an autoreply matches.
-            self._ai_review_completed = True
             await self._run_ai_review(message, ticket_text)
 
     async def _run_roblox_game_pass_autoreply(self, message, ticket_text: str) -> None:
@@ -1291,6 +1279,39 @@ class Thread:
             else "No AI reply sent; the existing ticket continued normally."
         )
         autoreplies, alias_actions, configuration_errors = self._resolve_ai_autoreplies(ticket_text)
+        if autoreplies:
+            try:
+                sent_types = await self.bot.api.get_ai_autoreplies_sent(self.channel.id)
+            except Exception:
+                # The atomic claim below remains authoritative, so a read failure is safe. It only
+                # means Gemini may select a duplicate which the claim will then suppress.
+                sent_types = set()
+                logger.warning(
+                    "Failed to pre-load sent AI autoreply types; using the atomic guard only.",
+                    exc_info=True,
+                )
+            else:
+                matching_types = {
+                    name: resolve_ai_autoreply_type(name, alias_actions.get(name))
+                    for name in autoreplies
+                }
+                autoreplies = {
+                    name: response
+                    for name, response in autoreplies.items()
+                    if matching_types[name] not in sent_types
+                }
+                if not autoreplies:
+                    await self._log_ai_check(
+                        message,
+                        ticket_text,
+                        outcome="duplicate_suppressed",
+                        detail="Every matching autoreply type was already sent in this ticket.",
+                        delivery_status=(
+                            "Duplicate suppressed; no Gemini request, AI reply, or alias command "
+                            "was run."
+                        ),
+                    )
+                    return
         api_key = self.bot.config.get("gemini_api_key", convert=False)
         if not autoreplies:
             await self._log_ai_check(
@@ -1325,11 +1346,7 @@ class Thread:
         delivery_error = None
         if selected is not None:
             alias_action = alias_actions.get(selected)
-            autoreply_type = " ".join(
-                str(alias_action["alias"] if alias_action is not None else selected)
-                .casefold()
-                .split()
-            )
+            autoreply_type = resolve_ai_autoreply_type(selected, alias_action)
             try:
                 claimed = await self.bot.api.claim_ai_autoreply(
                     self.channel.id,

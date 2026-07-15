@@ -55,7 +55,7 @@ class Modmail(commands.Cog):
 
     @commands.Cog.listener()
     async def on_thread_reply(self, thread, from_mod, message, anonymous, plain):
-        """Track the AI review window and unanswered recipient follow-ups."""
+        """Run eligible automatic replies and track unanswered recipient follow-ups."""
         key = str(thread.id)
         reminders = self.bot.config["reply_reminders"]
 
@@ -64,10 +64,8 @@ class Modmail(commands.Cog):
                 await self.bot.config.update()
             return
 
-        # The opening message is considered during thread setup so a matching
-        # autoreply can still be delivered before the normal opened receipt.
-        # Every subsequent recipient message remains eligible until Gemini has
-        # run once for this ticket.
+        # The opening message is considered during thread setup. Every later recipient message is
+        # considered here so different autoreply types can each run once in the same ticket.
         if getattr(thread, "_initial_message_id", None) != getattr(message, "id", None):
             try:
                 await thread.consider_ai_autoreply(message)
