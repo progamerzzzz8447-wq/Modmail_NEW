@@ -1017,6 +1017,11 @@ class Modmail(commands.Cog):
         `@here` and `@everyone` can be substituted with `here` and `everyone`.
         `user_or_role` may be a user ID, mention, name, role ID, mention, name, "everyone", or "here".
         """
+        embed = await self._subscribe_target(ctx, user_or_role)
+        return await ctx.send(embed=embed)
+
+    async def _subscribe_target(self, ctx, user_or_role):
+        """Subscribe a target and return the normal staff-side result embed."""
         mention = self.parse_user_or_role(ctx, user_or_role)
         if mention is None:
             raise commands.BadArgument(f"{user_or_role} is not a valid user or role.")
@@ -1040,7 +1045,33 @@ class Modmail(commands.Cog):
                 color=self.bot.main_color,
                 description=f"{mention} will now be notified of all messages received.",
             )
-        return await ctx.send(embed=embed)
+        return embed
+
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.thread_only()
+    async def transfer(self, ctx, *, user: User = None):
+        """Transfer a ticket to a user and subscribe them to future replies."""
+        if user is None:
+            return await ctx.send(
+                f"Please use {self.bot.prefix}transfer @USER",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        user_mention = getattr(user, "mention", f"<@{user.id}>")
+        transfer_message = (
+            "**<:Connected:1384981326246969344> | Ticket Transferred**\n\n"
+            f"This ticket has now been transferred to {user_mention} to best handle your inquiry."
+        )
+
+        # Match the requested ``freply ... && sub USER`` order: send the
+        # recipient-facing transfer notice first, then subscribe the assignee.
+        ctx.message.content = transfer_message
+        async with safe_typing(ctx):
+            await ctx.thread.reply(ctx.message, transfer_message)
+
+        subscription_embed = await self._subscribe_target(ctx, user)
+        await ctx.send(embed=subscription_embed)
 
     @commands.command(aliases=["unsub"])
     @checks.has_permissions(PermissionLevel.SUPPORTER)
