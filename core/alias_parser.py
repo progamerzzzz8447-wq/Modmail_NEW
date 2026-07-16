@@ -236,6 +236,7 @@ def _extract_autoreply_alternatives(value: str) -> typing.Tuple[str, typing.List
 
 AUTOREPLY_DISPLAY_NAME_LIMIT = 200
 AUTOREPLY_ADDITIONAL_INFO_LIMIT = 2_000
+AUTOREPLY_TOTAL_CHOICE_LIMIT = 50
 
 
 def _extract_autoreply_additional_info(

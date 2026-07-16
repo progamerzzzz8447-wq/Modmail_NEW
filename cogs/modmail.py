@@ -19,6 +19,7 @@ from dateutil import parser
 from core import checks
 from core.alias_parser import (
     AUTOREPLY_DISPLAY_NAME_LIMIT,
+    AUTOREPLY_TOTAL_CHOICE_LIMIT,
     format_autoreply_rule_spec,
     parse_autoreply_rule_spec,
     parse_reply_alias,
@@ -813,9 +814,11 @@ class Modmail(commands.Cog):
             if existing_key != key
         )
         new_choice_count = self._autoreply_choice_count(key, entry)
-        if existing_choice_count + new_choice_count > 25:
+        if existing_choice_count + new_choice_count > AUTOREPLY_TOTAL_CHOICE_LIMIT:
             raise commands.BadArgument(
-                "You can configure up to 25 total primary and alternative AI autoreply choices."
+                "You can configure up to "
+                f"{AUTOREPLY_TOTAL_CHOICE_LIMIT} total primary and alternative "
+                "AI autoreply choices."
             )
 
         existed = key in autoreplies

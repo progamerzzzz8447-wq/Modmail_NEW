@@ -2,6 +2,7 @@ import json
 import unittest
 
 from core.alias_parser import (
+    AUTOREPLY_TOTAL_CHOICE_LIMIT,
     DeferredDeleteMessage,
     format_autoreply_rule_spec,
     normalize_alias,
@@ -13,6 +14,9 @@ from core.alias_parser import (
 
 
 class AliasParserTests(unittest.TestCase):
+    def test_global_autoreply_choice_limit_is_50(self):
+        self.assertEqual(AUTOREPLY_TOTAL_CHOICE_LIMIT, 50)
+
     def test_multiline_quoted_alias_preserves_markdown_and_embedded_separator(self):
         raw = '"freply\nHello **there** && welcome" && "reply Second message"'
 
