@@ -390,6 +390,9 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         selected = await reviewer.classify(
             "How do I apply?",
             {"apply": "Use the application form.", "refund": "Request a refund here."},
+            selection_guidance={
+                "apply": "Select only for staff employment applications."
+            },
         )
 
         self.assertEqual(selected, "apply")
@@ -405,6 +408,8 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         prompt = request["json"]["contents"][0]["parts"][0]["text"]
         self.assertIn("A shared topic word is never sufficient evidence", prompt)
         self.assertIn("What department would be acceptable?", prompt)
+        self.assertIn("trusted `additional_info`", prompt)
+        self.assertIn("Select only for staff employment applications.", prompt)
         self.assertEqual(generation_config["thinkingConfig"]["thinkingLevel"], "minimal")
         self.assertEqual(generation_config["maxOutputTokens"], 256)
         self.assertEqual(generation_config["responseMimeType"], "application/json")

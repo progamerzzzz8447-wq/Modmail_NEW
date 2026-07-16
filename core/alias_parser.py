@@ -235,6 +235,79 @@ def _extract_autoreply_alternatives(value: str) -> typing.Tuple[str, typing.List
 
 
 AUTOREPLY_DISPLAY_NAME_LIMIT = 200
+AUTOREPLY_ADDITIONAL_INFO_LIMIT = 2_000
+
+
+def _extract_autoreply_additional_info(
+    value: str,
+) -> typing.Tuple[str, typing.Optional[str]]:
+    """Remove and parse an optional trailing ``ADDITIONAL INFO`` guidance block."""
+    marker_pattern = re.compile(
+        r"\[\s*[\"']?additional\s+info[\"']?\s*:\s*",
+        re.IGNORECASE | re.DOTALL,
+    )
+    marker = marker_pattern.search(value)
+    if marker is None:
+        return value, None
+
+    quote_char = None
+    escaped = False
+    closing_index = None
+    for index in range(marker.end(), len(value)):
+        character = value[index]
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\":
+            escaped = True
+            continue
+        if quote_char is not None:
+            if character == quote_char:
+                quote_char = None
+            continue
+        if character in "\"'":
+            quote_char = character
+        elif character == "]":
+            closing_index = index
+            break
+
+    if closing_index is None:
+        raise ValueError('The ["ADDITIONAL INFO": ...] block is missing its closing bracket.')
+    if value[closing_index + 1 :].strip():
+        raise ValueError('The ["ADDITIONAL INFO": ...] block must be at the end of the rule.')
+    if marker_pattern.search(value[: marker.start()]):
+        raise ValueError("Configure only one ADDITIONAL INFO block per autoreply rule.")
+
+    raw_info = value[marker.end() : closing_index].strip()
+    if not raw_info:
+        raise ValueError("ADDITIONAL INFO cannot be empty.")
+    if len(raw_info) >= 2 and raw_info[0] == raw_info[-1] and raw_info[0] in "\"'":
+        if raw_info[0] == '"':
+            try:
+                json_compatible = (
+                    raw_info[0]
+                    + raw_info[1:-1]
+                    .replace("\r", "\\r")
+                    .replace("\n", "\\n")
+                    .replace("\t", "\\t")
+                    + raw_info[-1]
+                )
+                additional_info = json.loads(json_compatible)
+            except json.JSONDecodeError as exc:
+                raise ValueError("ADDITIONAL INFO contains invalid quoted text.") from exc
+        else:
+            additional_info = raw_info[1:-1].replace("\\'", "'").replace("\\\\", "\\")
+    else:
+        additional_info = raw_info
+
+    additional_info = str(additional_info).strip()
+    if not additional_info:
+        raise ValueError("ADDITIONAL INFO cannot be empty.")
+    if len(additional_info) > AUTOREPLY_ADDITIONAL_INFO_LIMIT:
+        raise ValueError(
+            f"ADDITIONAL INFO cannot exceed {AUTOREPLY_ADDITIONAL_INFO_LIMIT} characters."
+        )
+    return value[: marker.start()].strip(), additional_info
 
 
 def parse_autoreply_rule_spec(name_argument: str, value: str) -> typing.Dict[str, typing.Any]:
@@ -256,7 +329,10 @@ def parse_autoreply_rule_spec(name_argument: str, value: str) -> typing.Dict[str
     display_name = name_match.group(1).strip()
     triggers = [item.strip().strip("\"'") for item in value_match.group(1).split(",")]
     triggers = list(dict.fromkeys(item.casefold() for item in triggers if item))
-    alias_value, alternatives = _extract_autoreply_alternatives(value_match.group(2).strip())
+    rule_value, additional_info = _extract_autoreply_additional_info(
+        value_match.group(2).strip()
+    )
+    alias_value, alternatives = _extract_autoreply_alternatives(rule_value)
     alias_name = alias_value.strip()
     if len(alias_name) >= 2 and alias_name[0] == alias_name[-1] and alias_name[0] in "\"'":
         alias_name = alias_name[1:-1].strip()
@@ -299,6 +375,8 @@ def parse_autoreply_rule_spec(name_argument: str, value: str) -> typing.Dict[str
     result = {"name": display_name, "triggers": triggers, "alias": alias_name}
     if alternatives:
         result["alternatives"] = alternatives
+    if additional_info is not None:
+        result["additional_info"] = additional_info
     return result
 
 
@@ -330,4 +408,7 @@ def format_autoreply_rule_spec(key: str, entry: typing.Any) -> str:
             for alternative in alternatives
         )
         result += f' ["ALTERNATIVES": {formatted_alternatives}]'
+    additional_info = str(entry.get("additional_info") or "").strip()
+    if additional_info:
+        result += f' ["ADDITIONAL INFO": {quote(additional_info)}]'
     return result

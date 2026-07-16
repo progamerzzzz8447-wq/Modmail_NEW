@@ -612,6 +612,8 @@ class Modmail(commands.Cog):
           `["MUST MENTION TO CHECK": apply, application, become, staff] apply`
         - Add choices with `["ALTERNATIVES": {{"Application status": status-alias}},`
           `{{"Application requirements": requirements-alias}}]`.
+        - Add trusted selection guidance at the very end with
+          `["ADDITIONAL INFO": "Context Gemini must consider before choosing"]`.
 
         The primary alias and every alternative must already exist. Once the trigger
         matches, Gemini selects the best reply and executes that alias in full.
@@ -696,6 +698,9 @@ class Modmail(commands.Cog):
                 for alternative in alternatives
                 if isinstance(alternative, dict)
             )
+        additional_info = str(entry.get("additional_info") or "").strip()
+        if additional_info:
+            formatted += f"\n**Additional info:** {additional_info}"
         return formatted
 
     @staticmethod
@@ -2282,6 +2287,7 @@ class Modmail(commands.Cog):
                 f"`{prefix}autoreply create \"NAME: …\" "
                 "[\"MUST MENTION TO CHECK\": …] ALIAS` — Create a rule.\n"
                 f"`{prefix}autoreply edit …` — Update a rule, including `ALTERNATIVES`.\n"
+                '`["ADDITIONAL INFO": "…"]` — Optional trusted selection guidance at the end.\n'
                 f"`{prefix}autoreply remove KEYWORD` — Delete a rule."
             ),
             inline=False,

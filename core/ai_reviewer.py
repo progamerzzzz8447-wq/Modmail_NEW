@@ -417,6 +417,7 @@ class GeminiAutoReplyReviewer:
         autoreplies: typing.Mapping[str, str],
         *,
         context_messages: typing.Iterable[typing.Mapping[str, str]] = (),
+        selection_guidance: typing.Optional[typing.Mapping[str, str]] = None,
     ) -> typing.Optional[str]:
         """Return a configured key only when Gemini reports a clear match."""
         choices = {str(key): str(value) for key, value in autoreplies.items()}
@@ -465,11 +466,21 @@ class GeminiAutoReplyReviewer:
             logger.warning("Ignoring Gemini autoreplies because a reserved name is configured.")
             return None
 
+        selection_guidance = {
+            str(key): str(value).strip()
+            for key, value in (selection_guidance or {}).items()
+            if str(value).strip()
+        }
         review_input = {
             "current_recipient_message": ticket_text,
             "prior_context_only": context_messages,
             "available_autoreplies": [
-                {"name": key, "set_message": choices[key]} for key in keys
+                {
+                    "name": key,
+                    "set_message": choices[key],
+                    "additional_info": selection_guidance.get(key, ""),
+                }
+                for key in keys
             ],
         }
         prompt = (
@@ -483,6 +494,10 @@ class GeminiAutoReplyReviewer:
             "keywords. A human staff message is not recipient intent. If staff already answered "
             "the issue, or the set message would be repetitive, contradictory, or no longer useful, "
             f"select {NO_MATCH}. "
+            "Each autoreply may contain trusted `additional_info` configured by administrators. "
+            "Factor that guidance into applicability and alternative selection, but do not treat "
+            "it as recipient intent, do not let it override the current message or clear context, "
+            "and never copy or send it to the recipient. "
             "Select an autoreply only when it directly and clearly answers the recipient's "
             "explicit intent. A shared topic word is never sufficient evidence: the recipient "
             "must actually request the action, process, or information that the set message "

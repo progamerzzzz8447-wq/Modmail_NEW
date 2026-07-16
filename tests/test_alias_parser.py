@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from core.alias_parser import (
@@ -112,6 +113,39 @@ class AliasParserTests(unittest.TestCase):
                 "NAME: Application help",
                 '["MUST MENTION TO CHECK": apply] apply '
                 f'["ALTERNATIVES": {{"{"x" * 201}": too-long}}]',
+            )
+
+    def test_parses_and_round_trips_additional_selection_info(self):
+        guidance = (
+            "Use the context to distinguish staff applications from questions about playing "
+            "the game on mobile. This guidance must never be sent to the recipient."
+        )
+        parsed = parse_autoreply_rule_spec(
+            "NAME: Application help",
+            '["MUST MENTION TO CHECK": apply, staff role] apply '
+            '["ALTERNATIVES": {"Device requirements": app-device}] '
+            f'["ADDITIONAL INFO": "{guidance}"]',
+        )
+
+        self.assertEqual(parsed["additional_info"], guidance)
+        formatted = format_autoreply_rule_spec("apply", parsed)
+        self.assertTrue(
+            formatted.endswith(f'["ADDITIONAL INFO": {json.dumps(guidance)}]')
+        )
+        self.assertNotIn("additional_info", formatted)
+
+    def test_additional_info_supports_multiline_text_and_rejects_empty_values(self):
+        parsed = parse_autoreply_rule_spec(
+            "NAME: Application help",
+            '["MUST MENTION TO CHECK": apply] apply '
+            '["ADDITIONAL INFO": "First line.\nSecond line."]',
+        )
+        self.assertEqual(parsed["additional_info"], "First line.\nSecond line.")
+
+        with self.assertRaisesRegex(ValueError, "cannot be empty"):
+            parse_autoreply_rule_spec(
+                "NAME: Application help",
+                '["MUST MENTION TO CHECK": apply] apply ["ADDITIONAL INFO": ]',
             )
 
     def test_alternatives_block_can_precede_primary_alias(self):

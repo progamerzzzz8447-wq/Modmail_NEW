@@ -1222,6 +1222,7 @@ class Thread:
                 alias_actions[display_name] = {
                     "alias": alias_name,
                     "steps": parse_alias(raw_alias),
+                    "additional_info": str(entry.get("additional_info") or "").strip(),
                 }
 
         return choices, alias_actions, errors
@@ -1363,6 +1364,10 @@ class Thread:
             ticket_text,
             autoreplies,
             context_messages=context_messages,
+            selection_guidance={
+                name: action.get("additional_info", "")
+                for name, action in alias_actions.items()
+            },
         )
         response_text = autoreplies.get(selected) if selected is not None else None
         delivery_error = None
