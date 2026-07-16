@@ -26,6 +26,7 @@ from core.ai_reviewer import (
     AI_REPLY_FOOTER,
     ROBLOX_GAME_PASS_AUTOREPLY,
     GeminiAutoReplyReviewer,
+    build_autoreply_context,
     build_ticket_text,
     describe_ai_error,
     generate_ai_message_joint_id,
@@ -1341,7 +1342,28 @@ class Thread:
             str(api_key),
             model=str(self.bot.config.get("gemini_model") or "gemini-3.1-flash-lite"),
         )
-        selected = await reviewer.classify(ticket_text, autoreplies)
+        try:
+            recent_messages = await self.bot.api.get_recent_log_messages(
+                self.channel.id,
+                limit=25,
+            )
+        except Exception:
+            recent_messages = []
+            logger.warning(
+                "Failed to load prior ticket context for Gemini autoreply classification.",
+                exc_info=True,
+            )
+        context_messages = build_autoreply_context(
+            recent_messages,
+            current_message_id=getattr(message, "id", None),
+            bot_user_id=self.bot.user.id,
+            limit=5,
+        )
+        selected = await reviewer.classify(
+            ticket_text,
+            autoreplies,
+            context_messages=context_messages,
+        )
         response_text = autoreplies.get(selected) if selected is not None else None
         delivery_error = None
         if selected is not None:

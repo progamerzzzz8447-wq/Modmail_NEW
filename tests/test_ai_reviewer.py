@@ -10,6 +10,7 @@ from core.ai_reviewer import (
     GeminiAutoReplyReviewer,
     GeminiHelpfulReplyGenerator,
     GeminiTicketSummaryGenerator,
+    build_autoreply_context,
     build_ticket_text,
     describe_ai_error,
     finalize_generated_ai_reply,
@@ -17,6 +18,7 @@ from core.ai_reviewer import (
     generate_ai_message_joint_id,
     has_application_trigger,
     has_configured_trigger,
+    has_department_transfer_intent,
     has_roblox_game_pass_url,
     resolve_ai_autoreply_type,
 )
@@ -74,6 +76,140 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             ),
             "apply-alias",
         )
+
+    def test_department_transfer_requires_explicit_change_intent(self):
+        self.assertFalse(has_department_transfer_intent("What department would be acceptable?"))
+        self.assertFalse(has_department_transfer_intent("Which departments are available?"))
+        self.assertTrue(has_department_transfer_intent("I want to change my department."))
+        self.assertTrue(has_department_transfer_intent("Can I transfer departments?"))
+
+    async def test_ambiguous_department_question_cannot_select_transfer_template(self):
+        session = FakeSession(
+            FakeResponse(
+                200,
+                generate_content_output(
+                    {"autoreply_key": "I wish to CHANGE DEPARTMENT"}
+                ),
+            )
+        )
+        reviewer = GeminiAutoReplyReviewer(session, "test-key")
+
+        selected = await reviewer.classify(
+            "What department would be acceptable?",
+            {
+                "I wish to CHANGE DEPARTMENT": (
+                    "Department Transfer | TUI Airways\n"
+                    "Thank you for expressing an interest in changing your current department."
+                )
+            },
+        )
+
+        self.assertIsNone(selected)
+        self.assertEqual(reviewer.last_outcome, "no_match")
+        self.assertEqual(session.calls, 0)
+
+    def test_builds_five_message_human_context_without_current_or_bot_messages(self):
+        log_messages = [
+            {
+                "message_id": str(index),
+                "author": {"id": str(index), "mod": index % 2 == 0},
+                "type": "thread_message",
+                "content": f"Conversation message {index}",
+            }
+            for index in range(1, 8)
+        ]
+        log_messages.extend(
+            [
+                {
+                    "message_id": "8",
+                    "author": {"id": "999", "mod": True},
+                    "type": "thread_message",
+                    "content": "Bot or AI output",
+                },
+                {
+                    "message_id": "9",
+                    "author": {"id": "22", "mod": True},
+                    "type": "internal",
+                    "content": "Private staff note",
+                },
+                {
+                    "message_id": "10",
+                    "author": {"id": "10", "mod": False},
+                    "type": "thread_message",
+                    "content": "Current recipient message",
+                },
+            ]
+        )
+
+        context = build_autoreply_context(
+            log_messages,
+            current_message_id=10,
+            bot_user_id=999,
+            limit=5,
+        )
+
+        self.assertEqual(len(context), 5)
+        self.assertEqual(context[0]["message"], "Conversation message 3")
+        self.assertEqual(context[-1]["message"], "Conversation message 7")
+        self.assertEqual(context[1]["speaker"], "human_staff")
+        self.assertNotIn("Bot or AI output", str(context))
+        self.assertNotIn("Private staff note", str(context))
+        self.assertNotIn("Current recipient message", str(context))
+
+    async def test_prior_recipient_and_staff_messages_are_context_only(self):
+        selection_name = "I wish to CHANGE DEPARTMENT"
+        session = FakeSession(
+            FakeResponse(200, generate_content_output({"autoreply_key": selection_name}))
+        )
+        reviewer = GeminiAutoReplyReviewer(session, "test-key")
+
+        selected = await reviewer.classify(
+            "What department would be acceptable?",
+            {selection_name: "Department Transfer | TUI Airways"},
+            context_messages=[
+                {
+                    "speaker": "recipient",
+                    "message": "I would like to transfer departments.",
+                },
+                {
+                    "speaker": "human_staff",
+                    "message": "Which department are you considering?",
+                },
+            ],
+        )
+
+        self.assertEqual(selected, selection_name)
+        _, request = session.request
+        prompt = request["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("prior_context_only", prompt)
+        self.assertIn("CONTEXT ONLY", prompt)
+        self.assertIn("A human staff message is not recipient intent", prompt)
+        self.assertIn("Which department are you considering?", prompt)
+
+    async def test_staff_context_alone_cannot_supply_department_transfer_intent(self):
+        session = FakeSession(
+            FakeResponse(
+                200,
+                generate_content_output(
+                    {"autoreply_key": "I wish to CHANGE DEPARTMENT"}
+                ),
+            )
+        )
+        reviewer = GeminiAutoReplyReviewer(session, "test-key")
+
+        selected = await reviewer.classify(
+            "What department would be acceptable?",
+            {"I wish to CHANGE DEPARTMENT": "Department Transfer | TUI Airways"},
+            context_messages=[
+                {
+                    "speaker": "human_staff",
+                    "message": "You can transfer departments if needed.",
+                }
+            ],
+        )
+
+        self.assertIsNone(selected)
+        self.assertEqual(session.calls, 0)
 
     def test_roblox_game_pass_url_matches_anywhere_in_message(self):
         self.assertTrue(
@@ -233,6 +369,9 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             "gemini-3.1-flash-lite:generateContent",
         )
         generation_config = request["json"]["generationConfig"]
+        prompt = request["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("A shared topic word is never sufficient evidence", prompt)
+        self.assertIn("What department would be acceptable?", prompt)
         self.assertEqual(generation_config["thinkingConfig"]["thinkingLevel"], "minimal")
         self.assertEqual(generation_config["maxOutputTokens"], 256)
         self.assertEqual(generation_config["responseMimeType"], "application/json")

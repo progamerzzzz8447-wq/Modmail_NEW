@@ -377,6 +377,13 @@ class ApiClient:
     async def get_ai_autoreplies_sent(self, channel_id: Union[str, int]) -> set:
         return NotImplemented
 
+    async def get_recent_log_messages(
+        self,
+        channel_id: Union[str, int],
+        limit: int = 25,
+    ) -> list:
+        return NotImplemented
+
     async def get_log_link(self, channel_id: Union[str, int]) -> str:
         return NotImplemented
 
@@ -594,6 +601,21 @@ class MongoDBClient(ApiClient):
             for value in (log.get("ai_autoreplies_sent") or [])
             if normalize_ai_autoreply_type(value)
         }
+
+    async def get_recent_log_messages(
+        self,
+        channel_id: Union[str, int],
+        limit: int = 25,
+    ) -> list:
+        """Return a small recent log slice for automatic-reply context construction."""
+        limit = max(int(limit), 1)
+        log = await self.logs.find_one(
+            {"channel_id": str(channel_id)},
+            {"messages": {"$slice": -limit}},
+        )
+        if log is None:
+            raise RuntimeError("The ticket log does not exist for AI context loading.")
+        return list(log.get("messages") or [])
 
     async def get_log_link(self, channel_id: Union[str, int]) -> str:
         doc = await self.get_log(channel_id)
