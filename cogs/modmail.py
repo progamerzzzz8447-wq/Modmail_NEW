@@ -18,6 +18,7 @@ from dateutil import parser
 
 from core import checks
 from core.alias_parser import (
+    AUTOREPLY_DISPLAY_NAME_LIMIT,
     format_autoreply_rule_spec,
     parse_autoreply_rule_spec,
     parse_reply_alias,
@@ -790,8 +791,11 @@ class Modmail(commands.Cog):
             entry = str(value)
             if key.upper() == NO_MATCH:
                 raise commands.BadArgument("That autoreply name is reserved.")
-            if not key or len(key) > 100:
-                raise commands.BadArgument("Autoreply names cannot be longer than 100 characters.")
+            if not key or len(key) > AUTOREPLY_DISPLAY_NAME_LIMIT:
+                raise commands.BadArgument(
+                    "Autoreply names cannot be longer than "
+                    f"{AUTOREPLY_DISPLAY_NAME_LIMIT} characters."
+                )
             if len(entry) > 4_000:
                 raise commands.BadArgument(
                     "Autoreply messages cannot be longer than 4,000 characters."

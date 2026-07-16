@@ -234,6 +234,9 @@ def _extract_autoreply_alternatives(value: str) -> typing.Tuple[str, typing.List
     return alias_value, alternatives
 
 
+AUTOREPLY_DISPLAY_NAME_LIMIT = 200
+
+
 def parse_autoreply_rule_spec(name_argument: str, value: str) -> typing.Dict[str, typing.Any]:
     """Parse ``NAME``/``MUST MENTION``/alias syntax used by ``?autoreply create``."""
     name_match = re.fullmatch(r"\s*name\s*:\s*(.+?)\s*", str(name_argument or ""), re.IGNORECASE | re.DOTALL)
@@ -261,8 +264,11 @@ def parse_autoreply_rule_spec(name_argument: str, value: str) -> typing.Dict[str
 
     if not display_name:
         raise ValueError("The autoreply display name cannot be empty.")
-    if len(display_name) > 100:
-        raise ValueError("The autoreply display name cannot be longer than 100 characters.")
+    if len(display_name) > AUTOREPLY_DISPLAY_NAME_LIMIT:
+        raise ValueError(
+            "The autoreply display name cannot be longer than "
+            f"{AUTOREPLY_DISPLAY_NAME_LIMIT} characters."
+        )
     if not triggers:
         raise ValueError("Configure at least one must-mention word or phrase.")
     if len(triggers) > 25:
@@ -276,8 +282,11 @@ def parse_autoreply_rule_spec(name_argument: str, value: str) -> typing.Dict[str
     for alternative in alternatives:
         alternative_name = alternative["name"]
         alternative_alias = alternative["alias"]
-        if not alternative_name or len(alternative_name) > 100:
-            raise ValueError("Alternative display names must be between 1 and 100 characters.")
+        if not alternative_name or len(alternative_name) > AUTOREPLY_DISPLAY_NAME_LIMIT:
+            raise ValueError(
+                "Alternative display names must be between 1 and "
+                f"{AUTOREPLY_DISPLAY_NAME_LIMIT} characters."
+            )
         if not alternative_alias or len(alternative_alias) > 120:
             raise ValueError("Alternative alias names must be between 1 and 120 characters.")
         normalized_name = alternative_name.casefold()

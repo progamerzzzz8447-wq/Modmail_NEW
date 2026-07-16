@@ -248,10 +248,32 @@ def has_configured_trigger(text: str, trigger_terms: typing.Iterable[str]) -> bo
     return False
 
 
-def has_department_transfer_intent(text: str) -> bool:
-    """Require an explicit department-change action, not merely the topic word."""
+def is_ticket_routing_request(text: str) -> bool:
+    """Identify requests to route the support conversation rather than transfer the user."""
     normalized = " ".join(str(text or "").casefold().split())
-    if not re.search(r"\bdepartments?\b", normalized):
+    action = r"(?:transfer|transferred|move|moved|redirect|reassign|forward|send|route|escalate)"
+    ticket_object = r"(?:ticket|case|thread|inquiry|support\s+request|conversation)"
+    return bool(
+        re.search(
+            rf"\b{action}\b\s+(?:(?:this|that|my|our|the|a)\s+)?\b{ticket_object}\b",
+            normalized,
+        )
+        or re.search(
+            rf"\b{ticket_object}\b.{{0,50}}\b{action}\b",
+            normalized,
+        )
+        or re.search(
+            rf"\b{action}\b\s+(?:this|that|it)\b.{{0,50}}"
+            r"\b(?:support\s+)?(?:department|team)\b",
+            normalized,
+        )
+    )
+
+
+def has_department_transfer_intent(text: str) -> bool:
+    """Require the user changing department, not a support-ticket routing request."""
+    normalized = " ".join(str(text or "").casefold().split())
+    if is_ticket_routing_request(normalized) or not re.search(r"\bdepartments?\b", normalized):
         return False
     return bool(
         re.search(
@@ -416,12 +438,18 @@ class GeminiAutoReplyReviewer:
             and has_department_transfer_intent(message["message"])
             for message in context_messages
         )
+        current_is_ticket_routing = is_ticket_routing_request(ticket_text)
         choices = {
             key: message
             for key, message in choices.items()
             if not is_department_transfer_autoreply(key, message)
-            or has_department_transfer_intent(ticket_text)
-            or contextual_transfer_intent
+            or (
+                not current_is_ticket_routing
+                and (
+                    has_department_transfer_intent(ticket_text)
+                    or contextual_transfer_intent
+                )
+            )
         }
         if not choices:
             self.last_outcome = "no_match"
@@ -462,7 +490,10 @@ class GeminiAutoReplyReviewer:
             "purchase, or report something merely because they mention a related noun. Questions "
             "such as 'What department would be acceptable?' do not request a department transfer; "
             "a transfer response requires explicit wording such as change, switch, move, or "
-            "transfer department. Consider whether sending the entire set message would be a "
+            "transfer department. A request to transfer, move, redirect, or escalate the support "
+            "ticket to another support department is ticket routing and must never select a form "
+            "for the recipient personally changing their staff department. Consider whether "
+            "sending the entire set message would be a "
             "natural and complete answer to the exact request. "
             f"Select {NO_MATCH} when no autoreply is relevant or the match is uncertain. "
             "Never write a reply or invent a category.\n\n"

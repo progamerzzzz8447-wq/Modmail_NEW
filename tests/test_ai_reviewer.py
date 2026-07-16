@@ -20,6 +20,7 @@ from core.ai_reviewer import (
     has_configured_trigger,
     has_department_transfer_intent,
     has_roblox_game_pass_url,
+    is_ticket_routing_request,
     resolve_ai_autoreply_type,
 )
 
@@ -82,6 +83,38 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(has_department_transfer_intent("Which departments are available?"))
         self.assertTrue(has_department_transfer_intent("I want to change my department."))
         self.assertTrue(has_department_transfer_intent("Can I transfer departments?"))
+        self.assertFalse(
+            has_department_transfer_intent(
+                "Can you transfer this ticket to another support department?"
+            )
+        )
+        self.assertTrue(
+            is_ticket_routing_request(
+                "Can you transfer this ticket to another support department?"
+            )
+        )
+
+    async def test_ticket_routing_cannot_select_personal_department_transfer(self):
+        selection_name = "I wish to CHANGE DEPARTMENT"
+        session = FakeSession(
+            FakeResponse(200, generate_content_output({"autoreply_key": selection_name}))
+        )
+        reviewer = GeminiAutoReplyReviewer(session, "test-key")
+
+        selected = await reviewer.classify(
+            "Can you transfer this ticket to another support department?",
+            {selection_name: "Department Transfer | TUI Airways"},
+            context_messages=[
+                {
+                    "speaker": "recipient",
+                    "message": "I previously asked about transferring departments.",
+                }
+            ],
+        )
+
+        self.assertIsNone(selected)
+        self.assertEqual(reviewer.last_outcome, "no_match")
+        self.assertEqual(session.calls, 0)
 
     async def test_ambiguous_department_question_cannot_select_transfer_template(self):
         session = FakeSession(
