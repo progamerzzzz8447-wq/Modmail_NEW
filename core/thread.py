@@ -1368,6 +1368,10 @@ class Thread:
                 name: action.get("additional_info", "")
                 for name, action in alias_actions.items()
             },
+            alias_names={
+                name: action.get("alias", "")
+                for name, action in alias_actions.items()
+            },
         )
         response_text = autoreplies.get(selected) if selected is not None else None
         delivery_error = None

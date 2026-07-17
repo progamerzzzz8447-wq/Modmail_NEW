@@ -85,6 +85,11 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(has_department_transfer_intent("Which departments are available?"))
         self.assertTrue(has_department_transfer_intent("I want to change my department."))
         self.assertTrue(has_department_transfer_intent("Can I transfer departments?"))
+        self.assertTrue(
+            has_department_transfer_intent(
+                "I want to change my dept from Ramp Agent to Ground Crew."
+            )
+        )
         self.assertFalse(
             has_department_transfer_intent(
                 "Can you transfer this ticket to another support department?"
@@ -275,6 +280,49 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CONTEXT ONLY", prompt)
         self.assertIn("A human staff message is not recipient intent", prompt)
         self.assertIn("Which department are you considering?", prompt)
+
+    async def test_alias_name_and_reply_sanity_are_sent_to_gemini(self):
+        session = FakeSession(
+            FakeResponse(200, generate_content_output({"autoreply_key": "Application help"}))
+        )
+        reviewer = GeminiAutoReplyReviewer(session, "test-key")
+
+        selected = await reviewer.classify(
+            "How do I apply?",
+            {"Application help": "Please use the application form."},
+            alias_names={"Application help": "apply-help"},
+        )
+
+        self.assertEqual(selected, "Application help")
+        _, request = session.request
+        prompt = request["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn('"alias": "apply-help"', prompt)
+        self.assertIn("what the recipient is actually asking", prompt)
+        self.assertIn("confusing, nonsensical in context", prompt)
+        self.assertIn("Useful extra context is allowed", prompt)
+
+    async def test_department_change_cannot_select_sub_certification(self):
+        department_reply = "Please complete this department transfer form."
+        session = FakeSession(
+            FakeResponse(200, generate_content_output({"autoreply_key": "Department change"}))
+        )
+        reviewer = GeminiAutoReplyReviewer(session, "test-key")
+
+        selected = await reviewer.classify(
+            "I want to change my dept from Ramp Agent to Ground Crew.",
+            {
+                "Department change": department_reply,
+                "SUB CERTIFICATION REQUEST": (
+                    "Please fill in your MAIN DEPARTMENT and DESIRED SUB DEPARTMENT."
+                ),
+            },
+        )
+
+        self.assertEqual(selected, "Department change")
+        _, request = session.request
+        prompt = request["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn(department_reply, prompt)
+        self.assertNotIn("DESIRED SUB DEPARTMENT", prompt)
 
     async def test_staff_context_alone_cannot_supply_department_transfer_intent(self):
         session = FakeSession(

@@ -276,19 +276,38 @@ def is_ticket_routing_request(text: str) -> bool:
 def has_department_transfer_intent(text: str) -> bool:
     """Require the user changing department, not a support-ticket routing request."""
     normalized = " ".join(str(text or "").casefold().split())
-    if is_ticket_routing_request(normalized) or not re.search(r"\bdepartments?\b", normalized):
+    department = r"(?:departments?|dept)"
+    if is_ticket_routing_request(normalized) or not re.search(rf"\b{department}\b", normalized):
         return False
     return bool(
         re.search(
             r"\b(?:change|changing|switch|switching|move|moving|transfer|transferring)\b"
-            r".{0,60}\bdepartments?\b",
+            rf".{{0,60}}\b{department}\b",
             normalized,
         )
         or re.search(
-            r"\bdepartments?\b.{0,60}"
+            rf"\b{department}\b.{{0,60}}"
             r"\b(?:change|changing|switch|switching|move|moving|transfer|transferring)\b",
             normalized,
         )
+    )
+
+
+def has_sub_certification_intent(text: str) -> bool:
+    """Return whether the recipient explicitly asks for an additional sub certification."""
+    normalized = " ".join(str(text or "").casefold().split())
+    return bool(
+        re.search(r"\bsub[ -]?(?:certification|cert|department)\b", normalized)
+        or re.search(r"\b(?:secondary|additional)\s+department\b", normalized)
+    )
+
+
+def is_sub_certification_autoreply(name: str, set_message: str) -> bool:
+    """Identify templates intended to add a sub certification, not change department."""
+    normalized = " ".join(f"{name} {set_message}".casefold().split())
+    return bool(
+        re.search(r"\bsub[ -]?(?:certification|cert)\b", normalized)
+        or "desired sub department" in normalized
     )
 
 
@@ -483,6 +502,7 @@ class GeminiAutoReplyReviewer:
         *,
         context_messages: typing.Iterable[typing.Mapping[str, str]] = (),
         selection_guidance: typing.Optional[typing.Mapping[str, str]] = None,
+        alias_names: typing.Optional[typing.Mapping[str, str]] = None,
     ) -> typing.Optional[str]:
         """Return a configured key only when Gemini reports a clear match."""
         choices = {str(key): str(value) for key, value in autoreplies.items()}
@@ -517,6 +537,14 @@ class GeminiAutoReplyReviewer:
                 )
             )
         }
+        explicit_department_transfer = has_department_transfer_intent(ticket_text)
+        explicit_sub_certification = has_sub_certification_intent(ticket_text)
+        if explicit_department_transfer and not explicit_sub_certification:
+            choices = {
+                key: message
+                for key, message in choices.items()
+                if not is_sub_certification_autoreply(key, message)
+            }
         if not choices:
             self.last_outcome = "no_match"
             self.last_detail = (
@@ -536,12 +564,18 @@ class GeminiAutoReplyReviewer:
             for key, value in (selection_guidance or {}).items()
             if str(value).strip()
         }
+        alias_names = {
+            str(key): str(value).strip()
+            for key, value in (alias_names or {}).items()
+            if str(value).strip()
+        }
         review_input = {
             "current_recipient_message": ticket_text,
             "prior_context_only": context_messages,
             "available_autoreplies": [
                 {
                     "name": key,
+                    "alias": alias_names.get(key, ""),
                     "set_message": choices[key],
                     "additional_info": selection_guidance.get(key, ""),
                 }
@@ -563,6 +597,10 @@ class GeminiAutoReplyReviewer:
             "Factor that guidance into applicability and alternative selection, but do not treat "
             "it as recipient intent, do not let it override the current message or clear context, "
             "and never copy or send it to the recipient. "
+            "The trusted `alias` identifies the configured alias that will execute if selected. "
+            "Use its name as additional context about the intended action, but do not select it "
+            "on the alias name alone. Judge whether the alias and its complete `set_message` "
+            "together are a sensible response to what the recipient is actually asking. "
             "Select an autoreply only when it directly and clearly answers the recipient's "
             "explicit intent. A shared topic word is never sufficient evidence: the recipient "
             "must actually request the action, process, or information that the set message "
@@ -574,7 +612,10 @@ class GeminiAutoReplyReviewer:
             "ticket to another support department is ticket routing and must never select a form "
             "for the recipient personally changing their staff department. Consider whether "
             "sending the entire set message would be a "
-            "natural and complete answer to the exact request. "
+            "natural, coherent, and complete answer to the exact request. Reject responses that "
+            "are confusing, nonsensical in context, answer a different question, or would require "
+            "unsupported assumptions. Useful extra context is allowed when it remains relevant "
+            "and does not obscure or contradict the direct answer. "
             f"Select {NO_MATCH} when no autoreply is relevant or the match is uncertain. "
             "Never write a reply or invent a category.\n\n"
             + json.dumps(review_input, ensure_ascii=False)
