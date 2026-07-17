@@ -33,8 +33,10 @@ from core.ai_reviewer import (
     GeminiHelpfulReplyGenerator,
     GeminiTicketSummaryGenerator,
     NO_MATCH,
+    build_relayed_reply_transcript,
     find_command_references,
     finalize_generated_ai_reply,
+    parse_aireply_argument,
 )
 from core.models import DMDisabled, PermissionLevel, SimilarCategoryConverter, getLogger
 from core.paginator import EmbedPaginatorSession
@@ -2093,49 +2095,66 @@ class Modmail(commands.Cog):
         staff_only: bool = False,
         include_closing: bool = True,
         closing_text: str = AI_REPLY_CLOSING,
+        relay_context_only: bool = False,
+        staff_context: str = "",
     ):
-        """Generate, deliver, and audit a manual AI reply from the full thread history."""
+        """Generate, deliver, and audit a manual AI reply from permitted ticket context."""
         api_key = self.bot.config.get("gemini_api_key", convert=False)
         if not api_key or self.bot.session is None:
             raise commands.CommandError("Gemini API credentials are not configured.")
 
-        transcript_blocks = []
-        message_count = 0
-        async for message in ctx.channel.history(limit=None, oldest_first=True):
-            if message.id == ctx.message.id:
-                continue
+        staff_context = str(staff_context or "").strip()
+        if relay_context_only:
+            log_entry = await self.bot.api.get_log(ctx.channel.id)
+            if log_entry is None:
+                raise commands.CommandError("The ticket conversation log could not be loaded.")
+            transcript, message_count = build_relayed_reply_transcript(
+                log_entry.get("messages") or [],
+                bot_user_id=self.bot.user.id,
+            )
+        else:
+            transcript_blocks = []
+            message_count = 0
+            async for message in ctx.channel.history(limit=None, oldest_first=True):
+                if message.id == ctx.message.id:
+                    continue
 
-            parts = []
-            content = (getattr(message, "clean_content", None) or message.content or "").strip()
-            if content:
-                parts.append(content)
-            for embed in message.embeds:
-                embed_parts = []
-                if embed.title:
-                    embed_parts.append(f"Title: {embed.title}")
-                if embed.description:
-                    embed_parts.append(str(embed.description))
-                for field in embed.fields:
-                    embed_parts.append(f"{field.name}: {field.value}")
-                if embed.footer and embed.footer.text:
-                    embed_parts.append(f"Footer: {embed.footer.text}")
-                if embed_parts:
-                    embed_author = getattr(embed.author, "name", None) or "embedded message"
-                    parts.append(f"{embed_author}: " + "\n".join(embed_parts))
-            if message.attachments:
-                parts.append(
-                    "Attachments: "
-                    + ", ".join(attachment.filename for attachment in message.attachments)
-                )
-            if not parts:
-                continue
+                parts = []
+                content = (getattr(message, "clean_content", None) or message.content or "").strip()
+                if content:
+                    parts.append(content)
+                for embed in message.embeds:
+                    embed_parts = []
+                    if embed.title:
+                        embed_parts.append(f"Title: {embed.title}")
+                    if embed.description:
+                        embed_parts.append(str(embed.description))
+                    for field in embed.fields:
+                        embed_parts.append(f"{field.name}: {field.value}")
+                    if embed.footer and embed.footer.text:
+                        embed_parts.append(f"Footer: {embed.footer.text}")
+                    if embed_parts:
+                        embed_author = getattr(embed.author, "name", None) or "embedded message"
+                        parts.append(f"{embed_author}: " + "\n".join(embed_parts))
+                if message.attachments:
+                    parts.append(
+                        "Attachments: "
+                        + ", ".join(attachment.filename for attachment in message.attachments)
+                    )
+                if not parts:
+                    continue
 
-            timestamp = message.created_at.isoformat()
-            author = getattr(message.author, "display_name", None) or str(message.author)
-            transcript_blocks.append(f"[{timestamp}] {author}\n" + "\n".join(parts))
-            message_count += 1
+                timestamp = message.created_at.isoformat()
+                author = getattr(message.author, "display_name", None) or str(message.author)
+                transcript_blocks.append(f"[{timestamp}] {author}\n" + "\n".join(parts))
+                message_count += 1
 
-        transcript = "\n\n---\n\n".join(transcript_blocks)
+            transcript = "\n\n---\n\n".join(transcript_blocks)
+
+        audit_input = transcript
+        if staff_context:
+            context_block = "[Staff-provided command context]\n" + staff_context
+            audit_input = f"{audit_input}\n\n---\n\n{context_block}" if audit_input else context_block
         generator = generator_cls(
             self.bot.session,
             str(api_key),
@@ -2146,7 +2165,7 @@ class Modmail(commands.Cog):
         response = None
         delivery_error = None
         async with safe_typing(ctx):
-            response = await generator.generate(transcript)
+            response = await generator.generate(transcript, staff_context=staff_context)
             if response is not None:
                 unsupported_commands = find_command_references(response)
                 if unsupported_commands:
@@ -2162,6 +2181,7 @@ class Modmail(commands.Cog):
                             "verified information only; if the request is unclear, ask one concise "
                             "clarification question."
                         ),
+                        staff_context=staff_context,
                     )
                     if response is None or find_command_references(response):
                         response = (
@@ -2198,7 +2218,7 @@ class Modmail(commands.Cog):
         if response is None:
             await ctx.thread._log_ai_check(
                 ctx.message,
-                transcript,
+                audit_input,
                 outcome=generator.last_outcome,
                 detail=generator.last_detail or "Gemini did not generate a reply.",
                 selected_name=command_name,
@@ -2214,7 +2234,7 @@ class Modmail(commands.Cog):
         if delivery_error is not None:
             await ctx.thread._log_ai_check(
                 ctx.message,
-                transcript,
+                audit_input,
                 outcome="delivery_error",
                 detail=(
                     f"Gemini generated a reply, but Discord delivery failed "
@@ -2237,7 +2257,7 @@ class Modmail(commands.Cog):
         )
         await ctx.thread._log_ai_check(
             ctx.message,
-            transcript,
+            audit_input,
             outcome=generator.last_outcome,
             detail=f"Generated from {message_count} thread messages.",
             selected_name=command_name,
@@ -2264,10 +2284,9 @@ class Modmail(commands.Cog):
         embed.add_field(
             name="Generate and send",
             value=(
-                f"`{prefix}aireply` — Generate and send a helpful response.\n"
-                f"`{prefix}aireply CONFIRM` — Send a helpful response without the "
-                "“Can I help with anything else?” line.\n"
-                f"`{prefix}aiall` — Summarize the resolved ticket and send the closure warning.\n"
+                f"`{prefix}aireply [CONTEXT]` — Generate and send a helpful response; optional "
+                "staff context guides the draft.\n"
+                f"`{prefix}aiall` — Answer any unresolved question, then send the closure warning.\n"
                 f"`{prefix}annoyautoreply` — Generate and send the sarcastic response.\n"
                 f"`{prefix}fakeautoreply MESSAGE` — Send your own text using the AI presentation."
             ),
@@ -2276,8 +2295,9 @@ class Modmail(commands.Cog):
         embed.add_field(
             name="Staff-only raw drafts",
             value=(
-                f"`{prefix}aireply raw` — Generate a helpful copyable draft without sending it.\n"
-                f"`{prefix}aiall raw` — Generate a closure-ready copyable summary without sending it."
+                f"`{prefix}aireply raw [CONTEXT]` — Generate a helpful copyable draft without "
+                "sending it.\n"
+                f"`{prefix}aiall raw` — Prepare the same closure reply without sending it."
             ),
             inline=False,
         )
@@ -2329,28 +2349,19 @@ class Modmail(commands.Cog):
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
-    async def aireply(self, ctx, mode: str = None):
-        """Generate and send a helpful AI response using the complete thread history."""
-        normalized_mode = mode.casefold() if mode is not None else None
-        if normalized_mode not in {None, "raw", "confirm"}:
-            raise commands.BadArgument(
-                f"Use `{self.bot.prefix}aireply`, `{self.bot.prefix}aireply raw`, "
-                f"or `{self.bot.prefix}aireply CONFIRM`."
-            )
-        staff_only = normalized_mode == "raw"
-        confirmed_without_closing = normalized_mode == "confirm"
+    async def aireply(self, ctx, *, argument: str = ""):
+        """Generate a helpful response from relayed conversation and optional staff context."""
+        staff_only, staff_context = parse_aireply_argument(argument)
         await self._send_generated_ai_reply(
             ctx,
             GeminiHelpfulReplyGenerator,
-            command_name=(
-                "aireply raw"
-                if staff_only
-                else "aireply CONFIRM" if confirmed_without_closing else "aireply"
-            ),
+            command_name="aireply raw" if staff_only else "aireply",
             log_name="Manual helpful AI reply",
             tone_label="helpful",
             staff_only=staff_only,
-            include_closing=not confirmed_without_closing,
+            include_closing=False,
+            relay_context_only=True,
+            staff_context=staff_context,
         )
 
     @commands.command()
@@ -2358,7 +2369,7 @@ class Modmail(commands.Cog):
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def aiall(self, ctx, mode: str = None):
-        """Summarize the ticket and send a closure-ready all-inquiries response."""
+        """Answer supported unresolved questions and send the all-inquiries closing."""
         normalized_mode = mode.casefold() if mode is not None else None
         if normalized_mode not in {None, "raw"}:
             raise commands.BadArgument(
@@ -2370,8 +2381,8 @@ class Modmail(commands.Cog):
             ctx,
             GeminiTicketSummaryGenerator,
             command_name="aiall raw" if staff_only else "aiall",
-            log_name="Manual all-inquiries AI summary",
-            tone_label="all-inquiries summary",
+            log_name="Manual all-inquiries AI check",
+            tone_label="all-inquiries check",
             staff_only=staff_only,
             include_closing=True,
             closing_text=AI_ALL_CLOSING,

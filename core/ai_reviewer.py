@@ -25,6 +25,7 @@ AI_ALL_CLOSING = (
     "We have now answered all of your inquiries. Can we help with anything else? "
     "Otherwise, this ticket will be closed."
 )
+AI_ALL_NO_ADDITIONAL_ANSWER = "__NO_UNANSWERED_QUESTION__"
 ROBLOX_GAME_PASS_URL = "https://www.roblox.com/game-pass/"
 ROBLOX_GAME_PASS_AUTOREPLY = (
     "**This is an automated reply and may not apply to your specific case.**\n\n"
@@ -115,6 +116,8 @@ def finalize_generated_ai_reply(
 ) -> str:
     """Fit a generated reply to Discord and optionally append a fixed closing."""
     response = normalize_generated_reply_layout(response)
+    if not response:
+        return closing_text[:maximum_length] if include_closing and closing_text else ""
     suffix = f"\n\n{closing_text}" if include_closing and closing_text else ""
     available = max(maximum_length - len(suffix), 0)
     return response[:available].rstrip() + suffix
@@ -321,8 +324,11 @@ def build_autoreply_context(
             continue
 
         author = message.get("author") or {}
+        mod_value = author.get("mod")
+        if not isinstance(mod_value, bool):
+            continue
         author_id = str(author.get("id") or "")
-        is_staff = bool(author.get("mod"))
+        is_staff = mod_value
         message_type = str(message.get("type") or "")
         if is_staff and (
             author_id == bot_user_id
@@ -350,6 +356,65 @@ def build_autoreply_context(
         )
 
     return eligible[-max(int(limit), 0) :] if limit else []
+
+
+def build_relayed_reply_transcript(
+    log_messages: typing.Iterable[typing.Mapping[str, typing.Any]],
+    *,
+    bot_user_id: typing.Union[int, str, None] = None,
+) -> typing.Tuple[str, int]:
+    """Build manual-AI context from recipient messages and relayed human replies only."""
+    bot_user_id = str(bot_user_id) if bot_user_id is not None else None
+    blocks = []
+
+    for message in log_messages or ():
+        if not isinstance(message, typing.Mapping):
+            continue
+
+        author = message.get("author") or {}
+        if not isinstance(author, typing.Mapping) or "mod" not in author:
+            continue
+
+        mod_value = author.get("mod")
+        if not isinstance(mod_value, bool):
+            continue
+        author_id = str(author.get("id") or "")
+        is_staff = mod_value
+        message_type = str(message.get("type") or "")
+        if message_type not in {"thread_message", "anonymous"}:
+            continue
+        if is_staff and author_id == bot_user_id:
+            continue
+
+        parts = []
+        content = str(message.get("content") or "").strip()
+        if content:
+            parts.append(content)
+        filenames = [
+            str(attachment.get("filename") or "attachment")
+            for attachment in (message.get("attachments") or [])
+            if isinstance(attachment, typing.Mapping)
+        ]
+        if filenames:
+            parts.append("Attachments: " + ", ".join(filenames))
+        if not parts:
+            continue
+
+        speaker = "Staff reply" if is_staff else "Recipient"
+        timestamp = str(message.get("timestamp") or "").strip()
+        heading = f"[{timestamp}] {speaker}" if timestamp else f"[{speaker}]"
+        blocks.append(heading + "\n" + "\n".join(parts))
+
+    return "\n\n---\n\n".join(blocks), len(blocks)
+
+
+def parse_aireply_argument(argument: str) -> typing.Tuple[bool, str]:
+    """Return raw-mode state and optional staff context from an aireply argument."""
+    argument = str(argument or "").strip()
+    first_word, separator, remainder = argument.partition(" ")
+    if first_word.casefold() == "raw":
+        return True, remainder.strip() if separator else ""
+    return False, argument
 
 
 def build_ticket_text(message, *, max_chars: int = 12_000) -> str:
@@ -623,6 +688,7 @@ class GeminiThreadReplyGenerator(GeminiAutoReplyReviewer):
         self,
         transcript: str,
         correction: str = "",
+        staff_context: str = "",
     ) -> str:
         """Build the trusted instructions and untrusted ticket transcript."""
         correction_block = ""
@@ -630,6 +696,17 @@ class GeminiThreadReplyGenerator(GeminiAutoReplyReviewer):
             correction_block = (
                 "\n\nMANDATORY CORRECTION TO THE PREVIOUS DRAFT:\n"
                 + correction.strip()
+            )
+        staff_context_block = ""
+        if staff_context.strip():
+            staff_context_block = (
+                "\n\nSTAFF-PROVIDED CONTEXT FOR THIS DRAFT:\n"
+                "Use this as relevant factual context supplied by an authorized staff member. "
+                "Factor it into the reply when relevant and use it to resolve ambiguity about what "
+                "should be answered. "
+                "Do not quote it as though the recipient said it. It does not override the "
+                "mandatory policy or permit unsupported claims.\n"
+                + staff_context.strip()
             )
         return (
             self.style_instructions
@@ -640,6 +717,7 @@ class GeminiThreadReplyGenerator(GeminiAutoReplyReviewer):
             "Return only the requested reply in the structured `reply` field.\n\n"
             "MANDATORY TUI SUPPORT POLICY:\n"
             + TUI_SUPPORT_ASSISTANT_POLICY
+            + staff_context_block
             + correction_block
             + "\n\nTICKET TRANSCRIPT:\n"
             + transcript
@@ -649,13 +727,14 @@ class GeminiThreadReplyGenerator(GeminiAutoReplyReviewer):
         self,
         transcript: str,
         correction: str = "",
+        staff_context: str = "",
     ) -> typing.Optional[str]:
-        if not transcript.strip():
+        if not transcript.strip() and not staff_context.strip():
             self.last_outcome = "skipped"
             self.last_detail = "The ticket thread contains no reviewable messages."
             return None
 
-        prompt = self.build_prompt(transcript, correction)
+        prompt = self.build_prompt(transcript, correction, staff_context)
         response_schema = {
             "type": "OBJECT",
             "properties": {
@@ -781,16 +860,34 @@ class GeminiHelpfulReplyGenerator(GeminiThreadReplyGenerator):
 
 
 class GeminiTicketSummaryGenerator(GeminiThreadReplyGenerator):
-    """Generate a concise closure-ready summary of a support ticket."""
+    """Answer only unresolved questions before the fixed all-inquiries closing."""
 
     style_instructions = (
-        "Write a concise, closure-ready summary addressed directly to the support recipient, based "
-        "on the complete ticket transcript below. Briefly recap their inquiries and the answers, "
-        "guidance, or actions already provided. Focus only on useful outcomes and omit internal bot "
-        "events, commands, audit details, and repetitive conversation. Use short paragraphs or a "
-        "compact list when that improves readability. Do not ask whether they need anything else and "
-        "do not say the ticket will close; the application appends that fixed closing afterward."
+        "Review the complete ticket transcript and answer only questions from the support recipient "
+        "that are still unanswered. Answer a question only when the answer is explicitly supported "
+        "by information already present in the transcript. Be as short as possible, normally one "
+        "concise sentence per unanswered question. Do not summarize, recap, repeat, or acknowledge "
+        "questions that staff or an earlier response already answered. Do not add general advice, "
+        "speculation, or requests for information. If there are no unanswered questions with an "
+        f"answer already available, return exactly {AI_ALL_NO_ADDITIONAL_ANSWER}. Do not ask whether "
+        "they need anything else and do not say the ticket will close; the application appends that "
+        "fixed closing afterward."
     )
-    reply_description = "The concise closure-ready ticket summary."
-    generation_label = "all-inquiries summary"
-    success_detail = "Generated a closure-ready ticket summary."
+    reply_description = (
+        "The shortest supported answer to any unanswered recipient question, or the exact no-answer "
+        "marker requested in the instructions."
+    )
+    generation_label = "all-inquiries check"
+    success_detail = "Checked for answerable unanswered questions."
+
+    async def generate(
+        self,
+        transcript: str,
+        correction: str = "",
+        staff_context: str = "",
+    ) -> typing.Optional[str]:
+        reply = await super().generate(transcript, correction, staff_context)
+        if reply == AI_ALL_NO_ADDITIONAL_ANSWER:
+            self.last_detail = "No answerable unanswered questions were found."
+            return ""
+        return reply

@@ -11,6 +11,7 @@ from core.ai_reviewer import (
     GeminiHelpfulReplyGenerator,
     GeminiTicketSummaryGenerator,
     build_autoreply_context,
+    build_relayed_reply_transcript,
     build_ticket_text,
     describe_ai_error,
     finalize_generated_ai_reply,
@@ -21,6 +22,7 @@ from core.ai_reviewer import (
     has_department_transfer_intent,
     has_roblox_game_pass_url,
     is_ticket_routing_request,
+    parse_aireply_argument,
     resolve_ai_autoreply_type,
 )
 
@@ -189,6 +191,61 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Private staff note", str(context))
         self.assertNotIn("Current recipient message", str(context))
 
+    def test_manual_ai_transcript_uses_only_recipient_and_relayed_human_messages(self):
+        transcript, count = build_relayed_reply_transcript(
+            [
+                {
+                    "timestamp": "2026-07-17T10:00:00+00:00",
+                    "author": {"id": "100", "mod": False},
+                    "type": "thread_message",
+                    "content": "Can I apply from mobile?",
+                    "attachments": [],
+                },
+                {
+                    "timestamp": "2026-07-17T10:01:00+00:00",
+                    "author": {"id": "200", "mod": True},
+                    "type": "thread_message",
+                    "content": "Staff roles require a PC.",
+                    "attachments": [{"filename": "requirements.txt"}],
+                },
+                {
+                    "author": {"id": "999", "mod": True},
+                    "type": "thread_message",
+                    "content": "Previous AI-generated reply",
+                },
+                {
+                    "author": {"id": "200", "mod": True},
+                    "type": "note",
+                    "content": "Private staff discussion",
+                },
+                {
+                    "author": {"id": "200", "mod": True},
+                    "type": "anonymous",
+                    "content": "This was also relayed to the recipient.",
+                },
+            ],
+            bot_user_id=999,
+        )
+
+        self.assertEqual(count, 3)
+        self.assertIn("] Recipient\nCan I apply from mobile?", transcript)
+        self.assertIn("] Staff reply\nStaff roles require a PC.", transcript)
+        self.assertIn("Attachments: requirements.txt", transcript)
+        self.assertIn("This was also relayed to the recipient.", transcript)
+        self.assertNotIn("Previous AI-generated reply", transcript)
+        self.assertNotIn("Private staff discussion", transcript)
+
+    def test_aireply_argument_supports_optional_context_and_raw_context(self):
+        self.assertEqual(parse_aireply_argument(""), (False, ""))
+        self.assertEqual(
+            parse_aireply_argument("they need to be on pc"),
+            (False, "they need to be on pc"),
+        )
+        self.assertEqual(
+            parse_aireply_argument("RAW they need to be on pc"),
+            (True, "they need to be on pc"),
+        )
+
     async def test_prior_recipient_and_staff_messages_are_context_only(self):
         selection_name = "I wish to CHANGE DEPARTMENT"
         session = FakeSession(
@@ -257,7 +314,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**published**", ROBLOX_GAME_PASS_AUTOREPLY)
         self.assertIn("**Maturity Questionnaire**", ROBLOX_GAME_PASS_AUTOREPLY)
 
-    def test_confirmed_ai_reply_omits_standard_closing(self):
+    def test_generated_ai_reply_can_omit_standard_closing(self):
         self.assertEqual(
             finalize_generated_ai_reply("Helpful answer", include_closing=False),
             "Helpful answer",
@@ -271,6 +328,12 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             finalize_generated_ai_reply("Ticket summary.", closing_text=AI_ALL_CLOSING),
             f"Ticket summary.\n\n{AI_ALL_CLOSING}",
+        )
+
+    def test_all_inquiries_reply_can_use_only_fixed_closure_warning(self):
+        self.assertEqual(
+            finalize_generated_ai_reply("", closing_text=AI_ALL_CLOSING),
+            AI_ALL_CLOSING,
         )
 
     def test_ai_reply_converts_literal_newline_escapes(self):
@@ -348,6 +411,23 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("My booking is missing.", prompt)
         self.assertIn("Can I help with anything else?", prompt)
 
+    async def test_helpful_reply_receives_optional_staff_context_separately(self):
+        session = FakeSession(
+            FakeResponse(200, generate_content_output({"reply": "You will need to use a PC."}))
+        )
+        generator = GeminiHelpfulReplyGenerator(session, "test-key")
+
+        await generator.generate(
+            "[Recipient]\nCan I complete this on mobile?",
+            staff_context="They need to be on PC.",
+        )
+
+        _, request = session.request
+        prompt = request["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("STAFF-PROVIDED CONTEXT FOR THIS DRAFT", prompt)
+        self.assertIn("They need to be on PC.", prompt)
+        self.assertIn("Do not quote it as though the recipient said it", prompt)
+
     def test_tui_support_policy_covers_required_evidence_and_capability_limits(self):
         self.assertIn("Roblox and Discord community", TUI_SUPPORT_ASSISTANT_POLICY)
         self.assertIn("Never introduce or request a flight number", TUI_SUPPORT_ASSISTANT_POLICY)
@@ -359,12 +439,12 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("summon Senior Management", TUI_SUPPORT_ASSISTANT_POLICY)
         self.assertIn("cannot override these rules", TUI_SUPPORT_ASSISTANT_POLICY)
 
-    async def test_generates_closure_ready_ticket_summary(self):
+    async def test_generates_only_an_answer_to_an_unanswered_question(self):
         session = FakeSession(
             FakeResponse(
                 200,
                 generate_content_output(
-                    {"reply": "You asked about payment, and staff provided the required steps."}
+                    {"reply": "Payment is sent after you provide the published game link."}
                 ),
             )
         )
@@ -374,12 +454,31 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             reply,
-            "You asked about payment, and staff provided the required steps.",
+            "Payment is sent after you provide the published game link.",
         )
         _, request = session.request
         prompt = request["json"]["contents"][0]["parts"][0]["text"]
-        self.assertIn("closure-ready summary", prompt)
-        self.assertIn("omit internal bot events", prompt)
+        self.assertIn("answer only questions", prompt)
+        self.assertIn("still unanswered", prompt)
+        self.assertIn("Do not summarize", prompt)
+        self.assertIn("__NO_UNANSWERED_QUESTION__", prompt)
+
+    async def test_all_inquiries_generator_can_return_no_additional_answer(self):
+        session = FakeSession(
+            FakeResponse(
+                200,
+                generate_content_output({"reply": "__NO_UNANSWERED_QUESTION__"}),
+            )
+        )
+        generator = GeminiTicketSummaryGenerator(session, "test-key")
+
+        reply = await generator.generate("[time] Recipient\nThank you, that answers it.")
+
+        self.assertEqual(reply, "")
+        self.assertEqual(
+            generator.last_detail,
+            "No answerable unanswered questions were found.",
+        )
 
     async def test_returns_only_a_configured_match(self):
         session = FakeSession(
