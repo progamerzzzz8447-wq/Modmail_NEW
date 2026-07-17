@@ -74,11 +74,13 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(set(AI_HELLO_MESSAGES)), 4)
         for message in AI_HELLO_MESSAGES:
             normalized = message.casefold()
-            self.assertIn("ai assistant", normalized)
-            self.assertIn("human", normalized)
-            self.assertIn("entire ticket", normalized)
-            self.assertIn("real agent", normalized)
+            self.assertIn("full", normalized)
+            self.assertIn("inquiry", normalized)
+            self.assertIn("direct", normalized)
+            self.assertIn("relevant team", normalized)
             self.assertIn("how can i help you today?", normalized)
+            self.assertNotIn("human", normalized)
+            self.assertNotIn("real agent", normalized)
 
     def test_extracts_generated_discord_command_references(self):
         self.assertEqual(

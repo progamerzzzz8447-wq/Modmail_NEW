@@ -28,19 +28,14 @@ AI_ALL_CLOSING = (
 AI_ALL_NO_ADDITIONAL_ANSWER = "__NO_UNANSWERED_QUESTION__"
 AI_HELLO_FOOTER = AI_REPLY_FOOTER
 AI_HELLO_MESSAGES = (
-    "Hello! Our AI assistant will initially help with your inquiry. Human staff can view the "
-    "entire ticket at all times, even when they are not replying directly. If you would prefer "
-    "to speak with a real agent, just ask at any point. How can I help you today?",
-    "Hi there! An AI assistant will help handle your inquiry, with the entire ticket visible "
-    "to our human support team throughout. You can request a real agent at any time simply by "
-    "saying that you would like human assistance. How can I help you today?",
-    "Welcome! Your inquiry may be answered by our AI assistant first, while human staff retain "
-    "access to the entire ticket and can review it even if they have not replied personally. "
-    "If you want a real agent instead, let us know at any stage. How can I help you today?",
-    "Thanks for contacting us! Our AI assistant will begin assisting with your inquiry. Human "
-    "team members can see the entire ticket while it is open, including messages they do not "
-    "answer directly. To speak with a real agent, ask for one whenever you wish. How can I help "
-    "you today?",
+    "Hello! Please state your full inquiry so I can direct your ticket to the relevant team. "
+    "How can I help you today?",
+    "Hi there! Please provide the full details of your inquiry, and I will direct your ticket to "
+    "the relevant team. How can I help you today?",
+    "Welcome! Tell me your full inquiry so your ticket can be directed to the relevant team. "
+    "How can I help you today?",
+    "Thanks for contacting us! Please explain your full inquiry, including any important details, "
+    "so I can direct your ticket to the relevant team. How can I help you today?",
 )
 ROBLOX_GAME_PASS_URL = "https://www.roblox.com/game-pass/"
 ROBLOX_GAME_PASS_AUTOREPLY = (
