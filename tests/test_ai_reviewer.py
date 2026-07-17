@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from core.ai_reviewer import (
     AI_ALL_CLOSING,
+    AI_HELLO_MESSAGES,
     ROBLOX_GAME_PASS_AUTOREPLY,
     TUI_SUPPORT_ASSISTANT_POLICY,
     GeminiAnnoyReplyGenerator,
@@ -65,6 +66,16 @@ def generate_content_output(value):
 
 
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
+    def test_aihi_has_four_complete_premade_disclosures(self):
+        self.assertEqual(len(AI_HELLO_MESSAGES), 4)
+        self.assertEqual(len(set(AI_HELLO_MESSAGES)), 4)
+        for message in AI_HELLO_MESSAGES:
+            normalized = message.casefold()
+            self.assertIn("ai assistant", normalized)
+            self.assertIn("human", normalized)
+            self.assertIn("entire ticket", normalized)
+            self.assertIn("real agent", normalized)
+
     def test_extracts_generated_discord_command_references(self):
         self.assertEqual(
             find_command_references("Use ?apply or ?ApplyStatus, but why?"),

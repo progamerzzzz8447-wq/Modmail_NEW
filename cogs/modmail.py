@@ -1,5 +1,6 @@
 import asyncio
 import re
+import secrets
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from itertools import zip_longest
@@ -27,6 +28,8 @@ from core.alias_parser import (
 from core.abuse_filter import contains_abusive_language, normalize_custom_abuse_term
 from core.ai_reviewer import (
     AI_ALL_CLOSING,
+    AI_HELLO_FOOTER,
+    AI_HELLO_MESSAGES,
     AI_REPLY_CLOSING,
     AI_REPLY_FOOTER,
     GeminiAnnoyReplyGenerator,
@@ -2083,6 +2086,32 @@ class Modmail(commands.Cog):
             raise delivery_error
 
         # Treat the manually sent message as a staff response for reminder bookkeeping.
+        self.bot.dispatch("thread_reply", ctx.thread, True, ctx.message, False, False)
+
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
+    @checks.thread_only()
+    async def aihi(self, ctx):
+        """Send one of four pre-written AI-assistance introductions without calling Gemini."""
+        message = secrets.choice(AI_HELLO_MESSAGES)
+        async with safe_typing(ctx):
+            await ctx.thread._send_ai_autoreply(
+                "AI assistance introduction",
+                message,
+                author_name="AI assistant",
+                footer_text=AI_HELLO_FOOTER,
+            )
+
+        await ctx.thread._log_ai_check(
+            ctx.message,
+            "Random selection from four pre-written introductions.",
+            outcome="premade",
+            detail="Sent a pre-written AI-assistance introduction; Gemini was not called.",
+            selected_name="aihi",
+            response_text=message,
+            delivery_status="Pre-written AI-assistance introduction delivered.",
+        )
         self.bot.dispatch("thread_reply", ctx.thread, True, ctx.message, False, False)
 
     async def _send_generated_ai_reply(

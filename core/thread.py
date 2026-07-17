@@ -813,16 +813,23 @@ class Thread:
 
         return self._genesis_message
 
-    async def _send_ai_autoreply(self, name: str, response_text: str) -> None:
+    async def _send_ai_autoreply(
+        self,
+        name: str,
+        response_text: str,
+        *,
+        author_name: str = "AI-generated reply",
+        footer_text: str = AI_REPLY_FOOTER,
+    ) -> None:
         """Deliver a configured AI-selected reply and preserve it in the ticket log."""
         joint_id = generate_ai_message_joint_id()
         embed = discord.Embed(description=response_text, color=self.bot.mod_color)
         embed.set_author(
-            name="AI-generated reply",
+            name=author_name,
             icon_url=self.bot.user.display_avatar.url,
             url=f"https://discordapp.com/users/{self.bot.user.id}#{joint_id}",
         )
-        embed.set_footer(text=AI_REPLY_FOOTER)
+        embed.set_footer(text=footer_text)
         await self.recipient.send(embed=embed)
 
         try:
@@ -839,7 +846,7 @@ class Thread:
             channel=self.channel,
             created_at=staff_message.created_at,
             author=self.bot.user,
-            content=f"[AI autoreply: {name}]\n{response_text}\n\n{AI_REPLY_FOOTER}",
+            content=f"[AI autoreply: {name}]\n{response_text}\n\n{footer_text}",
             attachments=[],
         )
         try:
@@ -862,7 +869,8 @@ class Thread:
             return False
         footer = getattr(message.embeds[0], "footer", None)
         footer_text = getattr(footer, "text", "") or ""
-        return footer_text.startswith(AI_REPLY_FOOTER)
+        author_name = getattr(message.embeds[0].author, "name", "") or ""
+        return footer_text.startswith(AI_REPLY_FOOTER) or author_name == "AI assistant"
 
     async def _find_legacy_ai_autoreply_messages(self, staff_message) -> typing.List:
         """Match an older unlinked AI staff copy to its recipient DM by content and time."""
