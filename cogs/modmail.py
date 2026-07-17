@@ -36,6 +36,7 @@ from core.ai_reviewer import (
     build_relayed_reply_transcript,
     find_command_references,
     finalize_generated_ai_reply,
+    last_relayed_message_is_human_staff,
     parse_aireply_argument,
 )
 from core.models import DMDisabled, PermissionLevel, SimilarCategoryConverter, getLogger
@@ -2224,12 +2225,13 @@ class Modmail(commands.Cog):
                 selected_name=command_name,
                 delivery_status="No AI reply was sent.",
             )
-            return await ctx.send(
+            await ctx.send(
                 embed=discord.Embed(
                     color=self.bot.error_color,
                     description=generator.last_detail or "Gemini could not generate a reply.",
                 )
             )
+            return False
 
         if delivery_error is not None:
             await ctx.thread._log_ai_check(
@@ -2266,6 +2268,15 @@ class Modmail(commands.Cog):
         )
         if not staff_only:
             self.bot.dispatch("thread_reply", ctx.thread, True, ctx.message, False, False)
+        return True
+
+    async def _resolve_aiall_thread(self, ctx) -> None:
+        """Mark a successfully answered ticket resolved and schedule its closure."""
+        await ctx.thread.close(closer=ctx.author, after=24 * 60 * 60)
+        await ctx.channel.edit(
+            name="resolved",
+            reason=f"aiall marked resolved by {ctx.author}",
+        )
 
     @commands.command()
     @checks.has_permissions(PermissionLevel.SUPPORTER)
@@ -2377,16 +2388,54 @@ class Modmail(commands.Cog):
             )
 
         staff_only = normalized_mode == "raw"
-        await self._send_generated_ai_reply(
-            ctx,
-            GeminiTicketSummaryGenerator,
-            command_name="aiall raw" if staff_only else "aiall",
-            log_name="Manual all-inquiries AI check",
-            tone_label="all-inquiries check",
-            staff_only=staff_only,
-            include_closing=True,
-            closing_text=AI_ALL_CLOSING,
-        )
+        skip_ai_check = False
+        if not staff_only:
+            try:
+                log_entry = await self.bot.api.get_log(ctx.channel.id)
+            except Exception:
+                logger.warning(
+                    "Could not determine the latest relayed author for aiall; running Gemini.",
+                    exc_info=True,
+                )
+            else:
+                skip_ai_check = bool(
+                    log_entry
+                    and last_relayed_message_is_human_staff(
+                        log_entry.get("messages") or [],
+                        bot_user_id=self.bot.user.id,
+                    )
+                    is True
+                )
+
+        if skip_ai_check:
+            await ctx.thread._send_ai_autoreply(
+                "Manual all-inquiries closure",
+                AI_ALL_CLOSING,
+            )
+            await ctx.thread._log_ai_check(
+                ctx.message,
+                "Latest relayed message was sent by human staff.",
+                outcome="skipped",
+                detail="Skipped the aiall Gemini review because human staff sent the latest relayed message.",
+                selected_name="aiall",
+                response_text=AI_ALL_CLOSING,
+                delivery_status="All-inquiries closure warning delivered without a Gemini request.",
+            )
+            delivered = True
+        else:
+            delivered = await self._send_generated_ai_reply(
+                ctx,
+                GeminiTicketSummaryGenerator,
+                command_name="aiall raw" if staff_only else "aiall",
+                log_name="Manual all-inquiries AI check",
+                tone_label="all-inquiries check",
+                staff_only=staff_only,
+                include_closing=True,
+                closing_text=AI_ALL_CLOSING,
+            )
+
+        if delivered and not staff_only:
+            await self._resolve_aiall_thread(ctx)
 
     @commands.command()
     @checks.has_permissions(PermissionLevel.SUPPORTER)

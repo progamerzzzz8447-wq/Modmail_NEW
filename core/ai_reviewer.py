@@ -427,6 +427,30 @@ def build_relayed_reply_transcript(
     return "\n\n---\n\n".join(blocks), len(blocks)
 
 
+def last_relayed_message_is_human_staff(
+    log_messages: typing.Iterable[typing.Mapping[str, typing.Any]],
+    *,
+    bot_user_id: typing.Union[int, str, None] = None,
+) -> typing.Optional[bool]:
+    """Identify the author side of the latest recipient-visible human conversation entry."""
+    bot_user_id = str(bot_user_id) if bot_user_id is not None else None
+    for message in reversed(list(log_messages or ())):
+        if not isinstance(message, typing.Mapping):
+            continue
+        author = message.get("author") or {}
+        if not isinstance(author, typing.Mapping):
+            continue
+        is_staff = author.get("mod")
+        if not isinstance(is_staff, bool):
+            continue
+        if str(message.get("type") or "") not in {"thread_message", "anonymous"}:
+            continue
+        if is_staff and str(author.get("id") or "") == bot_user_id:
+            continue
+        return is_staff
+    return None
+
+
 def parse_aireply_argument(argument: str) -> typing.Tuple[bool, str]:
     """Return raw-mode state and optional staff context from an aireply argument."""
     argument = str(argument or "").strip()

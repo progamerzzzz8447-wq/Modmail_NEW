@@ -22,6 +22,7 @@ from core.ai_reviewer import (
     has_department_transfer_intent,
     has_roblox_game_pass_url,
     is_ticket_routing_request,
+    last_relayed_message_is_human_staff,
     parse_aireply_argument,
     resolve_ai_autoreply_type,
 )
@@ -239,6 +240,41 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("This was also relayed to the recipient.", transcript)
         self.assertNotIn("Previous AI-generated reply", transcript)
         self.assertNotIn("Private staff discussion", transcript)
+
+    def test_latest_relayed_human_author_controls_aiall_skip(self):
+        messages = [
+            {
+                "author": {"id": "100", "mod": False},
+                "type": "thread_message",
+                "content": "Recipient question",
+            },
+            {
+                "author": {"id": "999", "mod": True},
+                "type": "thread_message",
+                "content": "Automated bot reply",
+            },
+            {
+                "author": {"id": "200", "mod": True},
+                "type": "note",
+                "content": "Private note",
+            },
+            {
+                "author": {"id": "200", "mod": True},
+                "type": "anonymous",
+                "content": "Human staff answer",
+            },
+        ]
+
+        self.assertTrue(last_relayed_message_is_human_staff(messages, bot_user_id=999))
+        messages.append(
+            {
+                "author": {"id": "100", "mod": False},
+                "type": "thread_message",
+                "content": "Recipient follow-up",
+            }
+        )
+        self.assertFalse(last_relayed_message_is_human_staff(messages, bot_user_id=999))
+        self.assertIsNone(last_relayed_message_is_human_staff([], bot_user_id=999))
 
     def test_aireply_argument_supports_optional_context_and_raw_context(self):
         self.assertEqual(parse_aireply_argument(""), (False, ""))
