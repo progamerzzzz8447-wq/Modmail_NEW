@@ -942,6 +942,7 @@ class GeminiThreadReplyGenerator(GeminiAutoReplyReviewer):
         correction: str = "",
         staff_context: str = "",
         staff_attachment_context: str = "",
+        _schema_retry: bool = False,
     ) -> typing.Optional[str]:
         if not transcript.strip() and not staff_context.strip() and not staff_attachment_context.strip():
             self.last_outcome = "skipped"
@@ -966,7 +967,7 @@ class GeminiThreadReplyGenerator(GeminiAutoReplyReviewer):
         }
         model = self.model.removeprefix("models/")
         generation_config = {
-            "maxOutputTokens": 512,
+            "maxOutputTokens": 1024,
             "responseMimeType": "application/json",
             "responseSchema": response_schema,
         }
@@ -1022,6 +1023,20 @@ class GeminiThreadReplyGenerator(GeminiAutoReplyReviewer):
 
         output_text = self._extract_output_text(data)
         if output_text is None:
+            if not _schema_retry:
+                retry_correction = (
+                    (correction.strip() + "\n\n") if correction.strip() else ""
+                ) + (
+                    "The previous response contained no valid structured output. Return one "
+                    "concise reply under 2,500 characters in the required JSON schema."
+                )
+                return await self.generate(
+                    transcript,
+                    retry_correction,
+                    staff_context,
+                    staff_attachment_context,
+                    _schema_retry=True,
+                )
             self.last_outcome = "invalid_response"
             self.last_detail = "Gemini returned no model output."
             return None
@@ -1029,10 +1044,36 @@ class GeminiThreadReplyGenerator(GeminiAutoReplyReviewer):
         try:
             reply = json.loads(output_text)["reply"]
         except (json.JSONDecodeError, KeyError, TypeError):
+            if not _schema_retry:
+                retry_correction = (
+                    (correction.strip() + "\n\n") if correction.strip() else ""
+                ) + (
+                    "The previous response was truncated or did not match the required JSON "
+                    "schema. Return one concise reply under 2,500 characters as valid structured "
+                    "JSON, with no text outside the required reply field."
+                )
+                return await self.generate(
+                    transcript,
+                    retry_correction,
+                    staff_context,
+                    staff_attachment_context,
+                    _schema_retry=True,
+                )
             self.last_outcome = "invalid_response"
             self.last_detail = "Gemini returned invalid structured output."
             return None
         if not isinstance(reply, str) or not reply.strip():
+            if not _schema_retry:
+                retry_correction = (
+                    (correction.strip() + "\n\n") if correction.strip() else ""
+                ) + "The previous structured reply was empty. Return one concise, non-empty reply."
+                return await self.generate(
+                    transcript,
+                    retry_correction,
+                    staff_context,
+                    staff_attachment_context,
+                    _schema_retry=True,
+                )
             self.last_outcome = "invalid_response"
             self.last_detail = "Gemini returned an empty reply."
             return None

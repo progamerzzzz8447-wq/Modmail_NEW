@@ -568,7 +568,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("cannot submit, approve, reject", prompt)
         self.assertIn("Can I help with anything else?", prompt)
         config = request["json"]["generationConfig"]
-        self.assertEqual(config["maxOutputTokens"], 512)
+        self.assertEqual(config["maxOutputTokens"], 1024)
         self.assertEqual(config["responseSchema"]["required"], ["reply"])
 
     async def test_generates_helpful_reply_from_the_ticket_transcript(self):
@@ -597,6 +597,32 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("My booking is missing.", prompt)
         self.assertIn("RECIPIENT MESSAGE, STAFF-SENT MESSAGE, or AI-SENT MESSAGE", prompt)
         self.assertIn("Can I help with anything else?", prompt)
+
+    async def test_helpful_reply_retries_invalid_structured_output_once(self):
+        invalid_output = {
+            "candidates": [
+                {"content": {"role": "model", "parts": [{"text": '{"reply":'}]}}
+            ]
+        }
+        session = FakeSession(
+            [
+                FakeResponse(200, invalid_output),
+                FakeResponse(200, generate_content_output({"reply": "Concise valid reply."})),
+            ]
+        )
+        generator = GeminiHelpfulReplyGenerator(session, "test-key")
+
+        reply = await generator.generate(
+            "[RECIPIENT MESSAGE]\nWhat should I do?",
+            staff_attachment_context="[FILE: knowledge.md]\nUse route A.\n[END FILE]",
+        )
+
+        self.assertEqual(reply, "Concise valid reply.")
+        self.assertEqual(session.calls, 2)
+        _, request = session.request
+        retry_prompt = request["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("truncated or did not match the required JSON schema", retry_prompt)
+        self.assertIn("Use route A.", retry_prompt)
 
     async def test_helpful_reply_receives_optional_staff_context_separately(self):
         session = FakeSession(
