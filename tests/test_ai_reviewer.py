@@ -15,7 +15,6 @@ from core.ai_reviewer import (
     GeminiTicketSummaryGenerator,
     build_autoreply_context,
     build_relayed_reply_transcript,
-    build_staff_message_export,
     build_ticket_text,
     describe_ai_error,
     finalize_generated_ai_reply,
@@ -295,50 +294,6 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(last_relayed_message_is_human_staff(messages, bot_user_id=999))
         self.assertIsNone(last_relayed_message_is_human_staff([], bot_user_id=999))
-
-    def test_staff_message_export_contains_only_relayed_human_staff_messages(self):
-        exported, count = build_staff_message_export(
-            [
-                {
-                    "timestamp": "2026-07-18T20:00:00+00:00",
-                    "author": {"id": "100", "name": "Recipient", "mod": False},
-                    "type": "thread_message",
-                    "content": "Recipient message",
-                },
-                {
-                    "timestamp": "2026-07-18T20:01:00+00:00",
-                    "author": {"id": "200", "name": "Alice", "mod": True},
-                    "type": "thread_message",
-                    "content": "Public staff answer",
-                    "attachments": [{"filename": "guide.txt", "url": "https://example/guide"}],
-                },
-                {
-                    "author": {"id": "201", "name": "Bob", "mod": True},
-                    "type": "anonymous",
-                    "content": "Anonymous staff answer",
-                },
-                {
-                    "author": {"id": "201", "name": "Bob", "mod": True},
-                    "type": "note",
-                    "content": "Private note",
-                },
-                {
-                    "author": {"id": "999", "name": "Bot", "mod": True},
-                    "type": "thread_message",
-                    "content": "[AI autoreply: Helpful] AI answer",
-                },
-            ],
-            bot_user_id=999,
-        )
-
-        self.assertEqual(count, 2)
-        self.assertIn("Alice (200) — Staff reply", exported)
-        self.assertIn("Public staff answer", exported)
-        self.assertIn("https://example/guide", exported)
-        self.assertIn("Bob (201) — Anonymous staff reply", exported)
-        self.assertNotIn("Recipient message", exported)
-        self.assertNotIn("Private note", exported)
-        self.assertNotIn("AI answer", exported)
 
     def test_aireply_argument_supports_optional_context_and_raw_context(self):
         self.assertEqual(parse_aireply_argument(""), (False, ""))

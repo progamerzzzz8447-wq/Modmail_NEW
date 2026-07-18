@@ -1129,6 +1129,26 @@ class Utility(commands.Cog):
 
         return await ctx.send(embed=embed)
 
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def aliasexport(self, ctx):
+        """Export the full raw content of every configured alias as a text file."""
+        if self.bot.aliases:
+            sections = [
+                f"===== {name} =====\n{self.bot.aliases[name]}"
+                for name in sorted(self.bot.aliases, key=str.casefold)
+            ]
+            export_text = "\n\n".join(sections) + "\n"
+        else:
+            export_text = "No aliases are configured.\n"
+
+        await ctx.send(
+            file=discord.File(
+                BytesIO(export_text.encode("utf-8")),
+                filename="aliases.txt",
+            )
+        )
+
     async def make_alias(self, name, value, action):
         values = utils.parse_alias(value)
         if not values:
