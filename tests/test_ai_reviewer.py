@@ -166,7 +166,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reviewer.last_outcome, "no_match")
         self.assertEqual(session.calls, 0)
 
-    def test_builds_five_message_human_context_without_current_or_bot_messages(self):
+    def test_builds_ten_message_human_context_without_current_or_bot_messages(self):
         log_messages = [
             {
                 "message_id": str(index),
@@ -174,24 +174,24 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
                 "type": "thread_message",
                 "content": f"Conversation message {index}",
             }
-            for index in range(1, 8)
+            for index in range(1, 13)
         ]
         log_messages.extend(
             [
                 {
-                    "message_id": "8",
+                    "message_id": "13",
                     "author": {"id": "999", "mod": True},
                     "type": "thread_message",
                     "content": "Bot or AI output",
                 },
                 {
-                    "message_id": "9",
+                    "message_id": "14",
                     "author": {"id": "22", "mod": True},
                     "type": "internal",
                     "content": "Private staff note",
                 },
                 {
-                    "message_id": "10",
+                    "message_id": "15",
                     "author": {"id": "10", "mod": False},
                     "type": "thread_message",
                     "content": "Current recipient message",
@@ -201,14 +201,14 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
 
         context = build_autoreply_context(
             log_messages,
-            current_message_id=10,
+            current_message_id=15,
             bot_user_id=999,
-            limit=5,
+            limit=10,
         )
 
-        self.assertEqual(len(context), 5)
+        self.assertEqual(len(context), 10)
         self.assertEqual(context[0]["message"], "Conversation message 3")
-        self.assertEqual(context[-1]["message"], "Conversation message 7")
+        self.assertEqual(context[-1]["message"], "Conversation message 12")
         self.assertEqual(context[1]["speaker"], "human_staff")
         self.assertNotIn("Bot or AI output", str(context))
         self.assertNotIn("Private staff note", str(context))
@@ -410,6 +410,12 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(
             has_roblox_game_pass_url("<HTTPS://WWW.ROBLOX.COM/GAME-PASS/12345>")
+        )
+        self.assertTrue(
+            has_roblox_game_pass_url("https://roblox.com/game-pass/12345/example")
+        )
+        self.assertTrue(
+            has_roblox_game_pass_url("http://roblox.com/game-pass/12345/example")
         )
         self.assertFalse(has_roblox_game_pass_url("https://www.roblox.com/games/12345"))
         self.assertIn("**published**", ROBLOX_GAME_PASS_AUTOREPLY)

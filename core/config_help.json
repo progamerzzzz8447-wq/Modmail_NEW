@@ -10,7 +10,7 @@
       "Requires the `GEMINI_API_KEY` environment variable and at least one configured `{prefix}autoreply`.",
       "Gemini selects an existing set message or a configured reply/freply alias; it does not compose the reply.",
       "Alias-backed rules call Gemini whenever a recipient message contains a configured must-mention word or phrase.",
-      "Gemini receives up to five prior recipient and human-staff messages as context only, so it can resolve references and avoid irrelevant or repetitive replies.",
+      "Gemini receives up to ten prior recipient and relayed human-staff messages as context only, so it can resolve references and avoid irrelevant or repetitive replies.",
       "Each autoreply or alias type can be sent only once per ticket, but different types may respond later in the same ticket."
     ]
   },

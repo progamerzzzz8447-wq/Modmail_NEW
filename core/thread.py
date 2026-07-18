@@ -1366,7 +1366,7 @@ class Thread:
             recent_messages,
             current_message_id=getattr(message, "id", None),
             bot_user_id=self.bot.user.id,
-            limit=5,
+            limit=10,
         )
         selected = await reviewer.classify(
             ticket_text,
