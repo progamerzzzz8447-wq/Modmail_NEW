@@ -27,6 +27,7 @@ AI_ALL_CLOSING = (
 )
 AI_ALL_NO_ADDITIONAL_ANSWER = "__NO_UNANSWERED_QUESTION__"
 AI_TEXT_ATTACHMENT_MAX_BYTES = 200_000
+AI_TEXT_ATTACHMENT_EXTENSIONS = (".txt", ".md", ".markdown")
 AI_HELLO_FOOTER = AI_REPLY_FOOTER
 AI_HELLO_MESSAGES = (
     "Hello! Please state your full inquiry so I can direct your ticket to the relevant team. "
@@ -105,9 +106,11 @@ def normalize_generated_reply_layout(response: str) -> str:
 
 
 def decode_ai_text_attachment(filename: str, payload: bytes) -> str:
-    """Decode one bounded UTF-8 text attachment for manual AI context."""
-    if not str(filename or "").casefold().endswith(".txt"):
-        raise ValueError("Only .txt attachments can be included in an AI reply prompt.")
+    """Decode one bounded UTF-8 text or Markdown attachment for manual AI context."""
+    if not str(filename or "").casefold().endswith(AI_TEXT_ATTACHMENT_EXTENSIONS):
+        raise ValueError(
+            "Only .txt, .md, and .markdown attachments can be included in an AI reply prompt."
+        )
     if len(payload) > AI_TEXT_ATTACHMENT_MAX_BYTES:
         raise ValueError(
             f"Text attachments cannot exceed {AI_TEXT_ATTACHMENT_MAX_BYTES:,} bytes each."

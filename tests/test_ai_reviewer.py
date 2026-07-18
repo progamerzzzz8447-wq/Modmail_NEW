@@ -75,6 +75,14 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             decode_ai_text_attachment("context.TXT", b"Useful context \xe2\x9c\x93"),
             "Useful context ✓",
         )
+        self.assertEqual(
+            decode_ai_text_attachment("knowledge.MD", b"# Knowledge\nUse route A."),
+            "# Knowledge\nUse route A.",
+        )
+        self.assertEqual(
+            decode_ai_text_attachment("knowledge.markdown", b"Canonical context"),
+            "Canonical context",
+        )
         with self.assertRaises(ValueError):
             decode_ai_text_attachment("context.pdf", b"not text")
         with self.assertRaises(ValueError):

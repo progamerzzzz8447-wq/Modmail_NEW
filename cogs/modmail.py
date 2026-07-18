@@ -33,6 +33,7 @@ from core.ai_reviewer import (
     AI_REPLY_CLOSING,
     AI_REPLY_FOOTER,
     AI_TEXT_ATTACHMENT_MAX_BYTES,
+    AI_TEXT_ATTACHMENT_EXTENSIONS,
     GeminiAnnoyReplyGenerator,
     GeminiHelpfulReplyGenerator,
     GeminiTicketSummaryGenerator,
@@ -2410,7 +2411,7 @@ class Modmail(commands.Cog):
         attachment_blocks = []
         total_attachment_bytes = 0
         for attachment in ctx.message.attachments:
-            if not attachment.filename.casefold().endswith(".txt"):
+            if not attachment.filename.casefold().endswith(AI_TEXT_ATTACHMENT_EXTENSIONS):
                 continue
             if attachment.size > AI_TEXT_ATTACHMENT_MAX_BYTES:
                 raise commands.BadArgument(
