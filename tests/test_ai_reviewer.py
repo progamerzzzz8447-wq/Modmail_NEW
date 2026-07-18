@@ -235,7 +235,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "author": {"id": "999", "mod": True},
                     "type": "thread_message",
-                    "content": "Previous AI-generated reply",
+                    "content": "[AI autoreply: Helpful]\nPrevious AI-generated reply",
                 },
                 {
                     "author": {"id": "200", "mod": True},
@@ -251,12 +251,13 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             bot_user_id=999,
         )
 
-        self.assertEqual(count, 3)
-        self.assertIn("] Recipient\nCan I apply from mobile?", transcript)
-        self.assertIn("] Staff reply\nStaff roles require a PC.", transcript)
+        self.assertEqual(count, 4)
+        self.assertIn("] RECIPIENT MESSAGE\nCan I apply from mobile?", transcript)
+        self.assertIn("] STAFF-SENT MESSAGE\nStaff roles require a PC.", transcript)
         self.assertIn("Attachments: requirements.txt", transcript)
-        self.assertIn("This was also relayed to the recipient.", transcript)
-        self.assertNotIn("Previous AI-generated reply", transcript)
+        self.assertIn("[STAFF-SENT MESSAGE]\nThis was also relayed to the recipient.", transcript)
+        self.assertIn("[AI-SENT MESSAGE]\n[AI autoreply: Helpful]", transcript)
+        self.assertIn("Previous AI-generated reply", transcript)
         self.assertNotIn("Private staff discussion", transcript)
 
     def test_latest_relayed_human_author_controls_aiall_skip(self):
@@ -575,6 +576,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Senior Management is not itself a", prompt)
         self.assertIn("line breaks with \\n", prompt)
         self.assertIn("My booking is missing.", prompt)
+        self.assertIn("RECIPIENT MESSAGE, STAFF-SENT MESSAGE, or AI-SENT MESSAGE", prompt)
         self.assertIn("Can I help with anything else?", prompt)
 
     async def test_helpful_reply_receives_optional_staff_context_separately(self):
@@ -593,12 +595,15 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("MANDATORY STAFF PROMPT FOR WHAT TO SAY", prompt)
         self.assertIn("They need to be on PC.", prompt)
         self.assertIn("authorized instruction", prompt)
-        self.assertIn("Reword only as needed to make it grammatical, logical, and clear", prompt)
+        self.assertIn("Correct grammar and make the wording coherent", prompt)
+        self.assertIn("lightly professionalize it", prompt)
+        self.assertIn("without changing, sanitizing, or weakening the core message", prompt)
         self.assertIn("Do not make it overly nice", prompt)
         self.assertIn("ordinary profanity", prompt)
+        self.assertIn("same message and level of firmness", prompt)
         self.assertIn("rather than turning it into a warning about language", prompt)
         self.assertIn("polite refusal or a reminder to use appropriate language", prompt)
-        self.assertIn("without diluting or embellishing it", prompt)
+        self.assertIn("without diluting, sanitizing, or embellishing it", prompt)
         self.assertIn("Do not quote it as though the recipient said it", prompt)
 
     def test_tui_support_policy_covers_required_evidence_and_capability_limits(self):
