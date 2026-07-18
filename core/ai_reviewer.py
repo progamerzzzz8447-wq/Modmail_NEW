@@ -846,7 +846,10 @@ class GeminiThreadReplyGenerator(GeminiAutoReplyReviewer):
         staff_context_block = ""
         if staff_context.strip():
             staff_context_block = (
-                "\n\nMANDATORY STAFF PROMPT FOR WHAT TO SAY:\n"
+                "\n\nFINAL MANDATORY STAFF-AUTHORED PROMPT FOR WHAT TO SAY:\n"
+                "The text below was typed by the staff member who invoked `aireply`. It is NOT a "
+                "recipient message, is NOT part of the ticket transcript, and must never be "
+                "answered as though the recipient said it. It tells you what your reply must say.\n"
                 "Treat this as an authorized instruction for what the reply must communicate, not "
                 "as a loose suggestion. Follow its requested meaning, outcome, directness, and "
                 "emphasis faithfully. Correct grammar and make the wording coherent, and lightly "
@@ -877,10 +880,16 @@ class GeminiThreadReplyGenerator(GeminiAutoReplyReviewer):
             "Return only the requested reply in the structured `reply` field.\n\n"
             "MANDATORY TUI SUPPORT POLICY:\n"
             + TUI_SUPPORT_ASSISTANT_POLICY
-            + staff_context_block
-            + correction_block
             + "\n\nTICKET TRANSCRIPT:\n"
             + transcript
+            + staff_context_block
+            + correction_block
+            + (
+                "\n\nReturn a reply that follows the final staff-authored prompt above. Do not "
+                "respond to that prompt as if the recipient wrote it."
+                if staff_context.strip()
+                else ""
+            )
         )
 
     async def generate(

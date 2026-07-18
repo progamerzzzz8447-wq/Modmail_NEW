@@ -592,7 +592,9 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
 
         _, request = session.request
         prompt = request["json"]["contents"][0]["parts"][0]["text"]
-        self.assertIn("MANDATORY STAFF PROMPT FOR WHAT TO SAY", prompt)
+        self.assertIn("FINAL MANDATORY STAFF-AUTHORED PROMPT FOR WHAT TO SAY", prompt)
+        self.assertIn("It is NOT a recipient message", prompt)
+        self.assertIn("must never be answered as though the recipient said it", prompt)
         self.assertIn("They need to be on PC.", prompt)
         self.assertIn("authorized instruction", prompt)
         self.assertIn("Correct grammar and make the wording coherent", prompt)
@@ -605,6 +607,15 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("polite refusal or a reminder to use appropriate language", prompt)
         self.assertIn("without diluting, sanitizing, or embellishing it", prompt)
         self.assertIn("Do not quote it as though the recipient said it", prompt)
+        self.assertGreater(
+            prompt.index("FINAL MANDATORY STAFF-AUTHORED PROMPT"),
+            prompt.index("TICKET TRANSCRIPT"),
+        )
+        self.assertTrue(
+            prompt.endswith(
+                "Do not respond to that prompt as if the recipient wrote it."
+            )
+        )
 
     def test_tui_support_policy_covers_required_evidence_and_capability_limits(self):
         self.assertIn("Roblox and Discord community", TUI_SUPPORT_ASSISTANT_POLICY)
