@@ -523,6 +523,50 @@ def last_relayed_message_is_human_staff(
     return None
 
 
+def build_staff_message_export(
+    log_messages: typing.Iterable[typing.Mapping[str, typing.Any]],
+    *,
+    bot_user_id: typing.Union[int, str, None] = None,
+) -> typing.Tuple[str, int]:
+    """Create a plain-text export of human staff messages relayed to the recipient."""
+    bot_user_id = str(bot_user_id) if bot_user_id is not None else None
+    blocks = []
+    for message in log_messages or ():
+        if not isinstance(message, typing.Mapping):
+            continue
+        author = message.get("author") or {}
+        if not isinstance(author, typing.Mapping) or author.get("mod") is not True:
+            continue
+        if str(author.get("id") or "") == bot_user_id:
+            continue
+        if str(message.get("type") or "") not in {"thread_message", "anonymous"}:
+            continue
+
+        content = str(message.get("content") or "").strip()
+        attachments = [
+            str(item.get("url") or item.get("filename") or "attachment")
+            for item in (message.get("attachments") or [])
+            if isinstance(item, typing.Mapping)
+        ]
+        if not content and not attachments:
+            continue
+
+        author_name = str(author.get("name") or "Unknown staff member")
+        author_id = str(author.get("id") or "unknown ID")
+        timestamp = str(message.get("timestamp") or "Unknown time")
+        message_kind = "Anonymous staff reply" if message.get("type") == "anonymous" else "Staff reply"
+        lines = [f"[{timestamp}] {author_name} ({author_id}) — {message_kind}"]
+        if content:
+            lines.append(content)
+        if attachments:
+            lines.append("Attachments: " + ", ".join(attachments))
+        blocks.append("\n".join(lines))
+
+    if not blocks:
+        return "No human staff messages were relayed to the recipient.\n", 0
+    return "\n\n---\n\n".join(blocks) + "\n", len(blocks)
+
+
 def parse_aireply_argument(argument: str) -> typing.Tuple[bool, str]:
     """Return raw-mode state and optional staff context from an aireply argument."""
     argument = str(argument or "").strip()

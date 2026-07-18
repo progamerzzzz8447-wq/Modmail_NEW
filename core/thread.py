@@ -27,6 +27,7 @@ from core.ai_reviewer import (
     ROBLOX_GAME_PASS_AUTOREPLY,
     GeminiAutoReplyReviewer,
     build_autoreply_context,
+    build_staff_message_export,
     build_ticket_text,
     describe_ai_error,
     generate_ai_message_joint_id,
@@ -61,6 +62,7 @@ from core.utils import (
 )
 
 logger = getLogger(__name__)
+STAFF_MESSAGE_EXPORT_CHANNEL_ID = 1528151308799049921
 
 
 class Thread:
@@ -1809,6 +1811,34 @@ class Thread:
             )
         else:
             log_data = None
+
+        # Archive every human staff reply that was actually relayed to the recipient.
+        if isinstance(log_data, dict):
+            export_text, export_count = build_staff_message_export(
+                log_data.get("messages") or [],
+                bot_user_id=self.bot.user.id,
+            )
+            try:
+                export_channel = self.bot.get_channel(STAFF_MESSAGE_EXPORT_CHANNEL_ID)
+                if export_channel is None:
+                    export_channel = await self.bot.fetch_channel(STAFF_MESSAGE_EXPORT_CHANNEL_ID)
+                await export_channel.send(
+                    content=(
+                        f"Staff-message export for closed ticket `{self.channel.name}` "
+                        f"(`{self.channel.id}`), recipient `{self.id}` — "
+                        f"{export_count} relayed staff message(s)."
+                    ),
+                    file=discord.File(
+                        io.BytesIO(export_text.encode("utf-8")),
+                        filename=f"staff-messages-{self.id}.txt",
+                    ),
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to send the closed-ticket staff-message export to channel %s.",
+                    STAFF_MESSAGE_EXPORT_CHANNEL_ID,
+                    exc_info=True,
+                )
 
         if isinstance(log_data, dict):
             prefix = self.bot.config["log_url_prefix"].strip("/")
