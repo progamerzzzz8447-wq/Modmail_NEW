@@ -326,6 +326,44 @@ def is_sub_certification_autoreply(name: str, set_message: str) -> bool:
     )
 
 
+def has_explicit_application_request(text: str) -> bool:
+    """Require an actual request to apply or join, not willingness to change roles."""
+    normalized = " ".join(str(text or "").casefold().split())
+    return bool(
+        re.search(
+            r"\b(?:i\s+(?:want|wish|would\s+like|need)\s+to|can\s+i|could\s+i|"
+            r"how\s+(?:do|can|would)\s+i)\s+(?:apply|join|sign\s*up|register)\b",
+            normalized,
+        )
+        or re.search(
+            r"\b(?:send|give|provide|complete|fill(?:\s+out)?)\b.{0,35}"
+            r"\b(?:application|form)\b",
+            normalized,
+        )
+        or re.search(r"\b(?:application|application\s+form)\b.{0,35}\b(?:please|link)\b", normalized)
+    )
+
+
+def is_on_request_application_autoreply(name: str, set_message: str) -> bool:
+    """Identify application forms configured to be sent only when explicitly requested."""
+    normalized_name = " ".join(str(name or "").casefold().split())
+    normalized_message = " ".join(str(set_message or "").casefold().split())
+    return "on request" in normalized_name and bool(
+        re.search(r"\b(?:application|apply)\b", normalized_name + " " + normalized_message)
+    )
+
+
+def has_conflicting_ground_ops_ramp_application(name: str, set_message: str) -> bool:
+    """Reject a Ground Operations candidate wired to a Ramp Agent application form."""
+    normalized_name = " ".join(str(name or "").casefold().split())
+    normalized_message = " ".join(str(set_message or "").casefold().split())
+    names_ground_ops = bool(re.search(r"\bground\s+(?:operations|ops)\b", normalized_name))
+    sends_ramp_form = bool(
+        re.search(r"\bramp\s+agent\b.{0,40}\b(?:application|fast\s+track)\b", normalized_message)
+    )
+    return names_ground_ops and sends_ramp_form
+
+
 def is_department_transfer_autoreply(name: str, set_message: str) -> bool:
     """Identify configured templates whose purpose is processing a department transfer."""
     normalized = " ".join(f"{name} {set_message}".casefold().split())
@@ -584,6 +622,15 @@ class GeminiAutoReplyReviewer:
                 for key, message in choices.items()
                 if not is_sub_certification_autoreply(key, message)
             }
+        choices = {
+            key: message
+            for key, message in choices.items()
+            if not has_conflicting_ground_ops_ramp_application(key, message)
+            and (
+                not is_on_request_application_autoreply(key, message)
+                or has_explicit_application_request(ticket_text)
+            )
+        }
         if not choices:
             self.last_outcome = "no_match"
             self.last_detail = (
