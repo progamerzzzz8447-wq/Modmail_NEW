@@ -1326,6 +1326,10 @@ class ModmailBot(commands.Bot):
                 self.aliases.pop(invoker)
 
             context_message = DeferredDeleteMessage(message) if len(aliases) > 1 else message
+            # Preserve the original alias identity through each expanded command. Reply handling
+            # records it only after delivery succeeds, allowing AI autoreplies to suppress a
+            # configured alias that staff already sent manually in this ticket.
+            setattr(context_message, "_manual_alias_name", invoker)
             for alias in aliases:
                 command = None
                 try:

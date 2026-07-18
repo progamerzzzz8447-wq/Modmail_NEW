@@ -600,12 +600,16 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Correct grammar and make the wording coherent", prompt)
         self.assertIn("lightly professionalize it", prompt)
         self.assertIn("without changing, sanitizing, or weakening the core message", prompt)
+        self.assertIn("only when genuinely needed", prompt)
+        self.assertIn("directly relevant, supported context or a practical next step", prompt)
+        self.assertIn("The staff prompt must remain the core of the reply", prompt)
+        self.assertIn("otherwise add nothing", prompt)
         self.assertIn("Do not make it overly nice", prompt)
         self.assertIn("ordinary profanity", prompt)
         self.assertIn("same message and level of firmness", prompt)
         self.assertIn("rather than turning it into a warning about language", prompt)
         self.assertIn("polite refusal or a reminder to use appropriate language", prompt)
-        self.assertIn("without diluting, sanitizing, or embellishing it", prompt)
+        self.assertIn("without diluting, sanitizing, or replacing it", prompt)
         self.assertIn("Do not quote it as though the recipient said it", prompt)
         self.assertGreater(
             prompt.index("FINAL MANDATORY STAFF-AUTHORED PROMPT"),
