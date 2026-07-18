@@ -44,6 +44,7 @@ class ConfigManager:
         "gemini_ai_enabled": True,
         "gemini_model": "gemini-3.1-flash-lite",
         "gemini_log_channel_id": "1526602233737773146",
+        "smart_ai_context": "",
         # recipient reply reminders
         "recipient_reply_reminder_delay": 43_200,
         "recipient_reply_reminder_text": (

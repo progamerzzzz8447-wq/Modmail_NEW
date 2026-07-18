@@ -6,6 +6,7 @@ from io import BytesIO
 from itertools import zip_longest
 from typing import Optional, Union, List, Tuple, Literal
 import logging
+from pathlib import Path
 
 import discord
 from discord.ext import commands
@@ -54,6 +55,7 @@ from core.utils import *
 logger = getLogger(__name__)
 
 MANUAL_AI_ROLE_IDS = (1391515982417100951, 1516405254571298866)
+DEFAULT_SMART_AI_CONTEXT_PATH = Path(__file__).resolve().parent.parent / "core" / "smart_ai_context.md"
 
 
 class Modmail(commands.Cog):
@@ -1160,11 +1162,24 @@ class Modmail(commands.Cog):
             mention = "@" + user_or_role.lstrip("@")
         return mention
 
-    @commands.command(usage="<MESSAGE>")
+    async def _get_smart_ai_context(self) -> str:
+        """Return persistent smart-AI context, falling back to the bundled knowledge base."""
+        configured = str(self.bot.config.get("smart_ai_context", convert=False) or "").strip()
+        if configured:
+            return configured
+        return (
+            await asyncio.to_thread(
+                DEFAULT_SMART_AI_CONTEXT_PATH.read_text,
+                encoding="utf-8",
+            )
+        ).strip()
+
+    @commands.group(invoke_without_command=True, usage="<MESSAGE>")
     @checks.has_permissions(PermissionLevel.SUPPORTER)
-    @checks.thread_only()
-    async def context(self, ctx, *, message: str):
+    async def context(self, ctx, *, message: str = ""):
         """Post plain staff-only context in a ticket, including from an alias."""
+        if getattr(ctx, "thread", None) is None:
+            raise commands.CommandError("This form of the context command must be used in a thread.")
         message = message.strip()
         if not message:
             raise commands.BadArgument("Provide the staff context message.")
@@ -1180,6 +1195,45 @@ class Modmail(commands.Cog):
         except Exception:
             logger.warning("Failed to append an alias context message to the ticket log.", exc_info=True)
         return staff_message
+
+    @context.command(name="raw")
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def context_raw(self, ctx):
+        """Download the currently active smart-AI knowledge base."""
+        content = await self._get_smart_ai_context()
+        await ctx.send(
+            file=discord.File(
+                BytesIO(content.encode("utf-8")),
+                filename="TUI_Airways_Roblox_Smart_AI_Context.md",
+            )
+        )
+
+    @context.command(name="edit")
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def context_edit(self, ctx):
+        """Replace the persistent smart-AI context with an attached text/Markdown file."""
+        attachment = next(
+            (
+                item
+                for item in ctx.message.attachments
+                if item.filename.casefold().endswith(AI_TEXT_ATTACHMENT_EXTENSIONS)
+            ),
+            None,
+        )
+        if attachment is None:
+            raise commands.BadArgument("Attach one .txt, .md, or .markdown context file.")
+        if attachment.size > AI_TEXT_ATTACHMENT_MAX_BYTES:
+            raise commands.BadArgument(
+                f"Context files cannot exceed {AI_TEXT_ATTACHMENT_MAX_BYTES:,} bytes."
+            )
+        try:
+            content = decode_ai_text_attachment(attachment.filename, await attachment.read()).strip()
+        except ValueError as exc:
+            raise commands.BadArgument(str(exc)) from exc
+        if not content:
+            raise commands.BadArgument("The attached context file is empty.")
+        await self.bot.config.set("smart_ai_context", content, convert=False)
+        await ctx.send("Smart AI context updated successfully.")
 
     @commands.command(aliases=["alert"])
     @checks.has_permissions(PermissionLevel.SUPPORTER)
@@ -2440,6 +2494,31 @@ class Modmail(commands.Cog):
             relay_context_only=True,
             staff_context=staff_context,
             staff_attachment_context="\n\n".join(attachment_blocks),
+        )
+
+    @commands.command(aliases=["saireply"])
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
+    @checks.thread_only()
+    async def smartaireply(self, ctx, *, argument: str = ""):
+        """Generate an AI reply using the persistent support knowledge base as context."""
+        staff_only, staff_context = parse_aireply_argument(argument)
+        knowledge_base = await self._get_smart_ai_context()
+        await self._send_generated_ai_reply(
+            ctx,
+            GeminiHelpfulReplyGenerator,
+            command_name="smartaireply raw" if staff_only else "smartaireply",
+            log_name="Manual smart AI reply",
+            tone_label="smart helpful",
+            staff_only=staff_only,
+            include_closing=False,
+            relay_context_only=True,
+            staff_context=staff_context,
+            staff_attachment_context=(
+                "[FILE: TUI_Airways_Roblox_Smart_AI_Context.md]\n"
+                + knowledge_base
+                + "\n[END FILE]"
+            ),
         )
 
     @commands.command()

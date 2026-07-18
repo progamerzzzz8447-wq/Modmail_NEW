@@ -1,4 +1,15 @@
 {
+  "smart_ai_context": {
+    "default": "Bundled TUI Airways Roblox support knowledge base",
+    "description": "Persistent Markdown context used by `{prefix}smartaireply` / `{prefix}saireply`.",
+    "examples": [
+      "Use `{prefix}context raw` to download it.",
+      "Use `{prefix}context edit` with an attached text or Markdown file to replace it."
+    ],
+    "notes": [
+      "The context is supplied to Gemini as trusted reference material, not as a recipient message or staff instruction."
+    ]
+  },
   "gemini_ai_enabled": {
     "default": "Yes",
     "description": "Scans every recipient message for configured wording, then uses Gemini to select a relevant configured `{prefix}autoreply` message that has not already been sent in that ticket.",
