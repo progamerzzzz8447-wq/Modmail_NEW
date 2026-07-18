@@ -2390,7 +2390,7 @@ class Modmail(commands.Cog):
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def aireply(self, ctx, *, argument: str = ""):
-        """Generate a helpful response from relayed conversation and optional staff context."""
+        """Generate a response from the conversation using the optional prompt as what to say."""
         staff_only, staff_context = parse_aireply_argument(argument)
         await self._send_generated_ai_reply(
             ctx,

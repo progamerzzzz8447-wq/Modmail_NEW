@@ -590,11 +590,14 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
 
         _, request = session.request
         prompt = request["json"]["contents"][0]["parts"][0]["text"]
-        self.assertIn("STAFF-PROVIDED CONTEXT FOR THIS DRAFT", prompt)
+        self.assertIn("MANDATORY STAFF PROMPT FOR WHAT TO SAY", prompt)
         self.assertIn("They need to be on PC.", prompt)
         self.assertIn("authorized instruction", prompt)
         self.assertIn("Reword only as needed to make it grammatical, logical, and clear", prompt)
         self.assertIn("Do not make it overly nice", prompt)
+        self.assertIn("ordinary profanity", prompt)
+        self.assertIn("rather than turning it into a warning about language", prompt)
+        self.assertIn("polite refusal or a reminder to use appropriate language", prompt)
         self.assertIn("without diluting or embellishing it", prompt)
         self.assertIn("Do not quote it as though the recipient said it", prompt)
 

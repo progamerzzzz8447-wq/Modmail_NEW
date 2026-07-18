@@ -837,14 +837,20 @@ class GeminiThreadReplyGenerator(GeminiAutoReplyReviewer):
         staff_context_block = ""
         if staff_context.strip():
             staff_context_block = (
-                "\n\nSTAFF-PROVIDED CONTEXT FOR THIS DRAFT:\n"
+                "\n\nMANDATORY STAFF PROMPT FOR WHAT TO SAY:\n"
                 "Treat this as an authorized instruction for what the reply must communicate, not "
                 "as a loose suggestion. Follow its requested meaning, outcome, directness, and "
                 "emphasis faithfully. Reword only as needed to make it grammatical, logical, and "
                 "clear. Do not make it overly nice, soften it, add unnecessary reassurance, omit "
-                "an uncomfortable point, or substitute a different answer. "
+                "an uncomfortable point, moralize about the requested wording, or substitute a "
+                "different answer. If it requests blunt language or ordinary profanity, preserve "
+                "that tone and message rather than turning it into a warning about language. This "
+                "is a narrow tone exception to the ordinary professional, neutral, and respectful "
+                "style rules. It never permits threats, hateful or discriminatory content, sexual "
+                "abuse, targeted degradation based on personal characteristics, or unsupported "
+                "factual or action claims. "
                 "Do not quote it as though the recipient said it. It does not override the "
-                "mandatory policy or permit unsupported claims.\n"
+                "mandatory accuracy, capability, privacy, or safety rules.\n"
                 + staff_context.strip()
             )
         return (
@@ -990,7 +996,9 @@ class GeminiHelpfulReplyGenerator(GeminiThreadReplyGenerator):
         "contains a reply or introduction; begin directly with the relevant answer or acknowledgment. "
         "Use a greeting only when this is genuinely the first conversational response in the ticket. "
         "When staff-provided context is present, prioritize communicating that instruction exactly "
-        "as intended; polish its grammar and logic without diluting or embellishing it. "
+        "as intended; polish its grammar and logic without diluting or embellishing it. Do not "
+        "replace requested bluntness or ordinary profanity with a polite refusal or a reminder to "
+        "use appropriate language. "
         "Directly address the recipient's latest issue and use relevant earlier "
         "context. Give actionable next steps when the transcript supports them. If information is "
         "missing, explain exactly what is needed or recommend appropriate human follow-up. Keep the "
