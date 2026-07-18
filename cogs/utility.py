@@ -1157,13 +1157,17 @@ class Utility(commands.Cog):
         """Export every stored ticket log as JSON files inside size-limited ZIP archives."""
         discord_limit = int(getattr(ctx.guild, "filesize_limit", 8 * 1024 * 1024))
         target_size = max(512 * 1024, discord_limit - 256 * 1024)
+        raw_chunk_limit = max(256 * 1024, target_size - 64 * 1024)
         archive_part = 1
         log_index = 0
         pending = []
+        pending_size = 0
 
         async def send_archive(entries):
             nonlocal archive_part
-            payload = build_ticket_log_zip(entries)
+            # Compression can be CPU-heavy for large databases. Never run it on Discord's
+            # event loop, otherwise heartbeats and every other bot action can stall.
+            payload = await asyncio.to_thread(build_ticket_log_zip, entries)
             await ctx.send(
                 file=discord.File(
                     BytesIO(payload),
@@ -1177,26 +1181,30 @@ class Utility(commands.Cog):
             async for log in cursor:
                 log_index += 1
                 filename = ticket_log_filename(log, log_index)
-                payload = json.dumps(
+                serialized = await asyncio.to_thread(
+                    json.dumps,
                     log,
                     ensure_ascii=False,
                     indent=2,
                     default=str,
                     sort_keys=True,
-                ).encode("utf-8")
-                candidate = [*pending, (filename, payload)]
-                if pending and len(build_ticket_log_zip(candidate)) > target_size:
+                )
+                payload = serialized.encode("utf-8")
+                entry_size = len(filename.encode("utf-8")) + len(payload) + 512
+                if pending and pending_size + entry_size > raw_chunk_limit:
                     await send_archive(pending)
                     pending = []
+                    pending_size = 0
 
                 single_entry = (filename, payload)
-                if len(build_ticket_log_zip([single_entry])) <= target_size:
+                if entry_size <= raw_chunk_limit:
                     pending.append(single_entry)
+                    pending_size += entry_size
                     continue
 
                 # Extremely large individual logs are split into byte-preserving parts. The
                 # pieces can be concatenated in filename order to recover the original JSON.
-                piece_size = max(128 * 1024, target_size // 2)
+                piece_size = raw_chunk_limit
                 for piece_number, offset in enumerate(range(0, len(payload), piece_size), start=1):
                     piece_name = f"{filename}.part-{piece_number:04d}"
                     await send_archive([(piece_name, payload[offset : offset + piece_size])])
