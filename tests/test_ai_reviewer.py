@@ -17,6 +17,7 @@ from core.ai_reviewer import (
     build_relayed_reply_transcript,
     build_ticket_text,
     describe_ai_error,
+    decode_ai_text_attachment,
     finalize_generated_ai_reply,
     find_command_references,
     generate_ai_message_joint_id,
@@ -69,6 +70,16 @@ def generate_content_output(value):
 
 
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
+    def test_decodes_utf8_text_attachment_for_aireply(self):
+        self.assertEqual(
+            decode_ai_text_attachment("context.TXT", b"Useful context \xe2\x9c\x93"),
+            "Useful context ✓",
+        )
+        with self.assertRaises(ValueError):
+            decode_ai_text_attachment("context.pdf", b"not text")
+        with self.assertRaises(ValueError):
+            decode_ai_text_attachment("context.txt", b"\xff")
+
     def test_aihi_has_four_complete_premade_disclosures(self):
         self.assertEqual(AI_HELLO_FOOTER, AI_REPLY_FOOTER)
         self.assertEqual(len(AI_HELLO_MESSAGES), 4)
@@ -620,6 +631,23 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
                 "Do not respond to that prompt as if the recipient wrote it."
             )
         )
+
+    async def test_helpful_reply_receives_staff_text_attachment_separately(self):
+        session = FakeSession(
+            FakeResponse(200, generate_content_output({"reply": "Use the supplied details."}))
+        )
+        generator = GeminiHelpfulReplyGenerator(session, "test-key")
+
+        await generator.generate(
+            "[RECIPIENT MESSAGE]\nWhat should I do?",
+            staff_attachment_context="[FILE: instructions.txt]\nUse route A.\n[END FILE]",
+        )
+
+        _, request = session.request
+        prompt = request["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("STAFF-ATTACHED TEXT FILES", prompt)
+        self.assertIn("[FILE: instructions.txt]", prompt)
+        self.assertIn("trusted reference material, not a recipient message", prompt)
 
     def test_tui_support_policy_covers_required_evidence_and_capability_limits(self):
         self.assertIn("Roblox and Discord community", TUI_SUPPORT_ASSISTANT_POLICY)

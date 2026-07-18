@@ -32,11 +32,13 @@ from core.ai_reviewer import (
     AI_HELLO_MESSAGES,
     AI_REPLY_CLOSING,
     AI_REPLY_FOOTER,
+    AI_TEXT_ATTACHMENT_MAX_BYTES,
     GeminiAnnoyReplyGenerator,
     GeminiHelpfulReplyGenerator,
     GeminiTicketSummaryGenerator,
     NO_MATCH,
     build_relayed_reply_transcript,
+    decode_ai_text_attachment,
     find_command_references,
     finalize_generated_ai_reply,
     last_relayed_message_is_human_staff,
@@ -2127,6 +2129,7 @@ class Modmail(commands.Cog):
         closing_text: str = AI_REPLY_CLOSING,
         relay_context_only: bool = False,
         staff_context: str = "",
+        staff_attachment_context: str = "",
     ):
         """Generate, deliver, and audit a manual AI reply from permitted ticket context."""
         api_key = self.bot.config.get("gemini_api_key", convert=False)
@@ -2185,6 +2188,13 @@ class Modmail(commands.Cog):
         if staff_context:
             context_block = "[Staff-provided command context]\n" + staff_context
             audit_input = f"{audit_input}\n\n---\n\n{context_block}" if audit_input else context_block
+        if staff_attachment_context:
+            attachment_block = "[Staff-attached text files]\n" + staff_attachment_context
+            audit_input = (
+                f"{audit_input}\n\n---\n\n{attachment_block}"
+                if audit_input
+                else attachment_block
+            )
         generator = generator_cls(
             self.bot.session,
             str(api_key),
@@ -2195,7 +2205,11 @@ class Modmail(commands.Cog):
         response = None
         delivery_error = None
         async with safe_typing(ctx):
-            response = await generator.generate(transcript, staff_context=staff_context)
+            response = await generator.generate(
+                transcript,
+                staff_context=staff_context,
+                staff_attachment_context=staff_attachment_context,
+            )
             if response is not None:
                 unsupported_commands = find_command_references(response)
                 if unsupported_commands:
@@ -2212,6 +2226,7 @@ class Modmail(commands.Cog):
                             "clarification question."
                         ),
                         staff_context=staff_context,
+                        staff_attachment_context=staff_attachment_context,
                     )
                     if response is None or find_command_references(response):
                         response = (
@@ -2392,6 +2407,27 @@ class Modmail(commands.Cog):
     async def aireply(self, ctx, *, argument: str = ""):
         """Generate a response from the conversation using the optional prompt as what to say."""
         staff_only, staff_context = parse_aireply_argument(argument)
+        attachment_blocks = []
+        total_attachment_bytes = 0
+        for attachment in ctx.message.attachments:
+            if not attachment.filename.casefold().endswith(".txt"):
+                continue
+            if attachment.size > AI_TEXT_ATTACHMENT_MAX_BYTES:
+                raise commands.BadArgument(
+                    f"`{attachment.filename}` exceeds the {AI_TEXT_ATTACHMENT_MAX_BYTES:,}-byte "
+                    "limit for AI text attachments."
+                )
+            payload = await attachment.read()
+            total_attachment_bytes += len(payload)
+            if total_attachment_bytes > AI_TEXT_ATTACHMENT_MAX_BYTES * 2:
+                raise commands.BadArgument("AI text attachments cannot exceed 400,000 bytes in total.")
+            try:
+                text_content = decode_ai_text_attachment(attachment.filename, payload)
+            except ValueError as exc:
+                raise commands.BadArgument(str(exc)) from exc
+            attachment_blocks.append(
+                f"[FILE: {attachment.filename}]\n{text_content}\n[END FILE]"
+            )
         await self._send_generated_ai_reply(
             ctx,
             GeminiHelpfulReplyGenerator,
@@ -2402,6 +2438,7 @@ class Modmail(commands.Cog):
             include_closing=False,
             relay_context_only=True,
             staff_context=staff_context,
+            staff_attachment_context="\n\n".join(attachment_blocks),
         )
 
     @commands.command()
