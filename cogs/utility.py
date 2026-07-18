@@ -1,7 +1,6 @@
 from core.utils import trigger_typing, truncate
 import asyncio
 import inspect
-import json
 import os
 import random
 import re
@@ -35,7 +34,6 @@ from core.models import (
 )
 from core.utils import DummyParam
 from core.paginator import EmbedPaginatorSession, MessagePaginatorSession
-from core.log_export import build_ticket_log_zip, ticket_log_filename
 
 
 logger = getLogger(__name__)
@@ -1130,91 +1128,6 @@ class Utility(commands.Cog):
         )
 
         return await ctx.send(embed=embed)
-
-    @commands.command()
-    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def aliasexport(self, ctx):
-        """Export the full raw content of every configured alias as a text file."""
-        if self.bot.aliases:
-            sections = [
-                f"===== {name} =====\n{self.bot.aliases[name]}"
-                for name in sorted(self.bot.aliases, key=str.casefold)
-            ]
-            export_text = "\n\n".join(sections) + "\n"
-        else:
-            export_text = "No aliases are configured.\n"
-
-        await ctx.send(
-            file=discord.File(
-                BytesIO(export_text.encode("utf-8")),
-                filename="aliases.txt",
-            )
-        )
-
-    @commands.command()
-    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def exporteverylogever(self, ctx):
-        """Export every stored ticket log as JSON files inside size-limited ZIP archives."""
-        discord_limit = int(getattr(ctx.guild, "filesize_limit", 8 * 1024 * 1024))
-        target_size = max(512 * 1024, discord_limit - 256 * 1024)
-        raw_chunk_limit = max(256 * 1024, target_size - 64 * 1024)
-        archive_part = 1
-        log_index = 0
-        pending = []
-        pending_size = 0
-
-        async def send_archive(entries):
-            nonlocal archive_part
-            # Compression can be CPU-heavy for large databases. Never run it on Discord's
-            # event loop, otherwise heartbeats and every other bot action can stall.
-            payload = await asyncio.to_thread(build_ticket_log_zip, entries)
-            await ctx.send(
-                file=discord.File(
-                    BytesIO(payload),
-                    filename=f"ticket-logs-part-{archive_part:04d}.zip",
-                )
-            )
-            archive_part += 1
-
-        cursor = self.bot.api.logs.find({})
-        async with ctx.typing():
-            async for log in cursor:
-                log_index += 1
-                filename = ticket_log_filename(log, log_index)
-                serialized = await asyncio.to_thread(
-                    json.dumps,
-                    log,
-                    ensure_ascii=False,
-                    indent=2,
-                    default=str,
-                    sort_keys=True,
-                )
-                payload = serialized.encode("utf-8")
-                entry_size = len(filename.encode("utf-8")) + len(payload) + 512
-                if pending and pending_size + entry_size > raw_chunk_limit:
-                    await send_archive(pending)
-                    pending = []
-                    pending_size = 0
-
-                single_entry = (filename, payload)
-                if entry_size <= raw_chunk_limit:
-                    pending.append(single_entry)
-                    pending_size += entry_size
-                    continue
-
-                # Extremely large individual logs are split into byte-preserving parts. The
-                # pieces can be concatenated in filename order to recover the original JSON.
-                piece_size = raw_chunk_limit
-                for piece_number, offset in enumerate(range(0, len(payload), piece_size), start=1):
-                    piece_name = f"{filename}.part-{piece_number:04d}"
-                    await send_archive([(piece_name, payload[offset : offset + piece_size])])
-
-            if pending:
-                await send_archive(pending)
-            elif log_index == 0:
-                await send_archive(
-                    [("README.txt", b"No ticket logs are currently stored.\n")]
-                )
 
     async def make_alias(self, name, value, action):
         values = utils.parse_alias(value)

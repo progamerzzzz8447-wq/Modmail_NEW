@@ -2446,39 +2446,6 @@ class Thread:
 
         await asyncio.gather(*tasks)
 
-        manual_alias_name = str(getattr(message, "_manual_alias_name", "") or "").strip()
-        configured_autoreply_aliases = set()
-        for entry in (self.bot.config.get("autoreplies") or {}).values():
-            if not isinstance(entry, Mapping):
-                continue
-            configured_autoreply_aliases.add(str(entry.get("alias") or "").casefold().strip())
-            configured_autoreply_aliases.update(
-                str(alternative.get("alias") or "").casefold().strip()
-                for alternative in (entry.get("alternatives") or [])
-                if isinstance(alternative, Mapping)
-            )
-        configured_autoreply_aliases.discard("")
-
-        if (
-            user_msg is not None
-            and manual_alias_name.casefold() in configured_autoreply_aliases
-        ):
-            try:
-                # This uses the same normalized durable type as AI alias delivery. A duplicate
-                # result is harmless: manual commands are never blocked, but future AI checks
-                # will see that this alias has already reached the recipient.
-                await self.bot.api.claim_ai_autoreply(
-                    self.channel.id,
-                    manual_alias_name,
-                    manual_alias_name,
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to record manually delivered alias %s for AI duplicate suppression.",
-                    manual_alias_name,
-                    exc_info=True,
-                )
-
         self.bot.dispatch("thread_reply", self, True, message, anonymous, plain)
         return (user_msg, msg)  # sent_to_user, sent_to_thread_channel
 
