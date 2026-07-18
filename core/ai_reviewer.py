@@ -838,9 +838,11 @@ class GeminiThreadReplyGenerator(GeminiAutoReplyReviewer):
         if staff_context.strip():
             staff_context_block = (
                 "\n\nSTAFF-PROVIDED CONTEXT FOR THIS DRAFT:\n"
-                "Use this as relevant factual context supplied by an authorized staff member. "
-                "Factor it into the reply when relevant and use it to resolve ambiguity about what "
-                "should be answered. "
+                "Treat this as an authorized instruction for what the reply must communicate, not "
+                "as a loose suggestion. Follow its requested meaning, outcome, directness, and "
+                "emphasis faithfully. Reword only as needed to make it grammatical, logical, and "
+                "clear. Do not make it overly nice, soften it, add unnecessary reassurance, omit "
+                "an uncomfortable point, or substitute a different answer. "
                 "Do not quote it as though the recipient said it. It does not override the "
                 "mandatory policy or permit unsupported claims.\n"
                 + staff_context.strip()
@@ -987,6 +989,8 @@ class GeminiHelpfulReplyGenerator(GeminiThreadReplyGenerator):
         "Do not begin with Hello, Hi, Hey, Welcome, or another greeting when the transcript already "
         "contains a reply or introduction; begin directly with the relevant answer or acknowledgment. "
         "Use a greeting only when this is genuinely the first conversational response in the ticket. "
+        "When staff-provided context is present, prioritize communicating that instruction exactly "
+        "as intended; polish its grammar and logic without diluting or embellishing it. "
         "Directly address the recipient's latest issue and use relevant earlier "
         "context. Give actionable next steps when the transcript supports them. If information is "
         "missing, explain exactly what is needed or recommend appropriate human follow-up. Keep the "

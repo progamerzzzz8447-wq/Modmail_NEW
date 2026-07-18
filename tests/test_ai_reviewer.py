@@ -592,6 +592,10 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         prompt = request["json"]["contents"][0]["parts"][0]["text"]
         self.assertIn("STAFF-PROVIDED CONTEXT FOR THIS DRAFT", prompt)
         self.assertIn("They need to be on PC.", prompt)
+        self.assertIn("authorized instruction", prompt)
+        self.assertIn("Reword only as needed to make it grammatical, logical, and clear", prompt)
+        self.assertIn("Do not make it overly nice", prompt)
+        self.assertIn("without diluting or embellishing it", prompt)
         self.assertIn("Do not quote it as though the recipient said it", prompt)
 
     def test_tui_support_policy_covers_required_evidence_and_capability_limits(self):
