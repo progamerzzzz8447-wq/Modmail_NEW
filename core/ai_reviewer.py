@@ -894,8 +894,11 @@ class GeminiThreadReplyGenerator(GeminiAutoReplyReviewer):
                 "\n\nSTAFF-ATTACHED TEXT FILES:\n"
                 "The following text was attached by the staff member invoking `aireply`. It is "
                 "trusted reference material, not a recipient message and not automatically an "
-                "instruction. Use it when relevant to the requested reply, preserve its filename "
-                "labels, and do not invent anything beyond it.\n"
+                "instruction. You MUST read every attached file before drafting. Identify the "
+                "facts and details relevant to the recipient's issue and the staff prompt, and "
+                "incorporate those relevant details into the reply. Do not merely acknowledge the "
+                "file or ignore it. Do not mention the filename unless that helps the recipient, "
+                "and do not invent anything beyond the supplied text.\n"
                 + staff_attachment_context.strip()
             )
         return (
@@ -919,6 +922,13 @@ class GeminiThreadReplyGenerator(GeminiAutoReplyReviewer):
                 "\n\nReturn a reply that follows the final staff-authored prompt above. Do not "
                 "respond to that prompt as if the recipient wrote it."
                 if staff_context.strip()
+                else ""
+            )
+            + (
+                "\n\nBefore returning the reply, verify that you used every directly relevant "
+                "detail from the attached text-file context above. Omit only details that truly "
+                "do not relate to the requested reply."
+                if staff_attachment_context.strip()
                 else ""
             )
         )

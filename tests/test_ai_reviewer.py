@@ -648,6 +648,9 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("STAFF-ATTACHED TEXT FILES", prompt)
         self.assertIn("[FILE: instructions.txt]", prompt)
         self.assertIn("trusted reference material, not a recipient message", prompt)
+        self.assertIn("You MUST read every attached file before drafting", prompt)
+        self.assertIn("Do not merely acknowledge the file or ignore it", prompt)
+        self.assertIn("verify that you used every directly relevant detail", prompt)
 
     def test_tui_support_policy_covers_required_evidence_and_capability_limits(self):
         self.assertIn("Roblox and Discord community", TUI_SUPPORT_ASSISTANT_POLICY)
