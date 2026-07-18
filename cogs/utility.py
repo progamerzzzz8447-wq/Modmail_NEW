@@ -1,6 +1,7 @@
 from core.utils import trigger_typing, truncate
 import asyncio
 import inspect
+import json
 import os
 import random
 import re
@@ -34,6 +35,7 @@ from core.models import (
 )
 from core.utils import DummyParam
 from core.paginator import EmbedPaginatorSession, MessagePaginatorSession
+from core.log_export import build_ticket_log_zip, ticket_log_filename
 
 
 logger = getLogger(__name__)
@@ -1148,6 +1150,63 @@ class Utility(commands.Cog):
                 filename="aliases.txt",
             )
         )
+
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def exporteverylogever(self, ctx):
+        """Export every stored ticket log as JSON files inside size-limited ZIP archives."""
+        discord_limit = int(getattr(ctx.guild, "filesize_limit", 8 * 1024 * 1024))
+        target_size = max(512 * 1024, discord_limit - 256 * 1024)
+        archive_part = 1
+        log_index = 0
+        pending = []
+
+        async def send_archive(entries):
+            nonlocal archive_part
+            payload = build_ticket_log_zip(entries)
+            await ctx.send(
+                file=discord.File(
+                    BytesIO(payload),
+                    filename=f"ticket-logs-part-{archive_part:04d}.zip",
+                )
+            )
+            archive_part += 1
+
+        cursor = self.bot.api.logs.find({})
+        async with ctx.typing():
+            async for log in cursor:
+                log_index += 1
+                filename = ticket_log_filename(log, log_index)
+                payload = json.dumps(
+                    log,
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                    sort_keys=True,
+                ).encode("utf-8")
+                candidate = [*pending, (filename, payload)]
+                if pending and len(build_ticket_log_zip(candidate)) > target_size:
+                    await send_archive(pending)
+                    pending = []
+
+                single_entry = (filename, payload)
+                if len(build_ticket_log_zip([single_entry])) <= target_size:
+                    pending.append(single_entry)
+                    continue
+
+                # Extremely large individual logs are split into byte-preserving parts. The
+                # pieces can be concatenated in filename order to recover the original JSON.
+                piece_size = max(128 * 1024, target_size // 2)
+                for piece_number, offset in enumerate(range(0, len(payload), piece_size), start=1):
+                    piece_name = f"{filename}.part-{piece_number:04d}"
+                    await send_archive([(piece_name, payload[offset : offset + piece_size])])
+
+            if pending:
+                await send_archive(pending)
+            elif log_index == 0:
+                await send_archive(
+                    [("README.txt", b"No ticket logs are currently stored.\n")]
+                )
 
     async def make_alias(self, name, value, action):
         values = utils.parse_alias(value)
