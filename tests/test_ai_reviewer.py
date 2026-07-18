@@ -407,6 +407,9 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertTrue(has_explicit_application_request("Can I apply for Ground Operations?"))
+        self.assertTrue(
+            has_explicit_application_request("can I get the gops direct entry pls")
+        )
 
     async def test_ground_ops_candidate_cannot_send_ramp_agent_form(self):
         session = FakeSession(
@@ -564,6 +567,8 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         _, request = session.request
         prompt = request["json"]["contents"][0]["parts"][0]["text"]
         self.assertIn("helpful, clear, warm, and practical", prompt)
+        self.assertIn("Continue the existing conversation naturally", prompt)
+        self.assertIn("Do not begin with Hello, Hi, Hey, Welcome", prompt)
         self.assertIn("Avoid dense walls of text", prompt)
         self.assertIn("MANDATORY TUI SUPPORT POLICY", prompt)
         self.assertIn("Never replace missing facts", prompt)

@@ -336,6 +336,16 @@ def has_explicit_application_request(text: str) -> bool:
             normalized,
         )
         or re.search(
+            r"\b(?:can|could|may)\s+i\s+(?:get|have|receive)\b.{0,60}"
+            r"\b(?:direct\s+entry|application|form)\b",
+            normalized,
+        )
+        or re.search(
+            r"\b(?:please|pls)\b.{0,40}\b(?:send|give|provide)\b.{0,40}"
+            r"\b(?:direct\s+entry|application|form)\b",
+            normalized,
+        )
+        or re.search(
             r"\b(?:send|give|provide|complete|fill(?:\s+out)?)\b.{0,35}"
             r"\b(?:application|form)\b",
             normalized,
@@ -382,7 +392,7 @@ def build_autoreply_context(
     *,
     current_message_id: typing.Union[int, str, None] = None,
     bot_user_id: typing.Union[int, str, None] = None,
-    limit: int = 5,
+    limit: int = 10,
 ) -> typing.List[typing.Dict[str, str]]:
     """Return recent human conversation messages labelled as untrusted prior context."""
     current_message_id = str(current_message_id) if current_message_id is not None else None
@@ -973,7 +983,11 @@ class GeminiHelpfulReplyGenerator(GeminiThreadReplyGenerator):
 
     style_instructions = (
         "Write a helpful, clear, warm, and practical support response based on the complete ticket "
-        "transcript below. Directly address the recipient's latest issue and use relevant earlier "
+        "transcript below. Continue the existing conversation naturally rather than restarting it. "
+        "Do not begin with Hello, Hi, Hey, Welcome, or another greeting when the transcript already "
+        "contains a reply or introduction; begin directly with the relevant answer or acknowledgment. "
+        "Use a greeting only when this is genuinely the first conversational response in the ticket. "
+        "Directly address the recipient's latest issue and use relevant earlier "
         "context. Give actionable next steps when the transcript supports them. If information is "
         "missing, explain exactly what is needed or recommend appropriate human follow-up. Keep the "
         "reply concise, professional, respectful, and easy to understand. Avoid dense walls of text. "
