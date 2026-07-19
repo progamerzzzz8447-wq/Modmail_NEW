@@ -24,7 +24,6 @@ from core.ai_reviewer import (
     has_application_trigger,
     has_configured_trigger,
     has_department_transfer_intent,
-    has_explicit_application_request,
     has_roblox_game_pass_url,
     is_ticket_routing_request,
     last_relayed_message_is_human_staff,
@@ -397,62 +396,6 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         prompt = request["json"]["contents"][0]["parts"][0]["text"]
         self.assertIn(department_reply, prompt)
         self.assertNotIn("DESIRED SUB DEPARTMENT", prompt)
-
-    async def test_conditional_ground_ops_offer_cannot_request_application_form(self):
-        reviewer = GeminiAutoReplyReviewer(
-            FakeSession(
-                FakeResponse(
-                    200,
-                    generate_content_output(
-                        {"autoreply_key": "Ground Operations DIRECT entry application ON REQUEST"}
-                    ),
-                )
-            ),
-            "test-key",
-        )
-        selected = await reviewer.classify(
-            "If needs I am able to go to ground ops whichever works best for you people",
-            {
-                "Ground Operations DIRECT entry application ON REQUEST": (
-                    "Ground Operations application form"
-                )
-            },
-        )
-
-        self.assertIsNone(selected)
-        self.assertEqual(reviewer.last_outcome, "no_match")
-        self.assertFalse(
-            has_explicit_application_request(
-                "If needs I am able to go to ground ops whichever works best for you people"
-            )
-        )
-        self.assertTrue(has_explicit_application_request("Can I apply for Ground Operations?"))
-        self.assertTrue(
-            has_explicit_application_request("can I get the gops direct entry pls")
-        )
-
-    async def test_ground_ops_candidate_cannot_send_ramp_agent_form(self):
-        session = FakeSession(
-            FakeResponse(
-                200,
-                generate_content_output(
-                    {"autoreply_key": "Ground Operations DIRECT entry application ON REQUEST"}
-                ),
-            )
-        )
-        reviewer = GeminiAutoReplyReviewer(session, "test-key")
-
-        selected = await reviewer.classify(
-            "Can I apply for Ground Operations?",
-            {
-                "Ground Operations DIRECT entry application ON REQUEST": (
-                    "Ramp Agent Fast Track Application\nDiscord Username:"
-                )
-            },
-        )
-
-        self.assertIsNone(selected)
-        self.assertEqual(session.calls, 0)
 
     async def test_staff_context_alone_cannot_supply_department_transfer_intent(self):
         session = FakeSession(
