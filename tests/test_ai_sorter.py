@@ -131,12 +131,17 @@ class GeminiTicketBatchReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"id": "200"', prompt)
 
     async def test_http_error_does_not_retry(self):
-        session = FakeSession(FakeResponse(500, {}))
+        session = FakeSession(
+            FakeResponse(404, {"error": {"message": "Model is not available to this project."}})
+        )
         reviewer = GeminiTicketBatchReviewer(session, "secret")
         result = await reviewer.review([{"id": "100", "transcript": "Help"}])
         self.assertIsNone(result)
         self.assertEqual(len(session.requests), 1)
-        self.assertEqual(reviewer.last_detail, "Gemini returned HTTP 500.")
+        self.assertEqual(
+            reviewer.last_detail,
+            "Gemini returned HTTP 404. Model is not available to this project.",
+        )
 
 
 if __name__ == "__main__":

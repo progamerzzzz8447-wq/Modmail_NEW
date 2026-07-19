@@ -224,8 +224,16 @@ class GeminiTicketBatchReviewer:
                 timeout=self.timeout,
             ) as response:
                 if response.status != 200:
+                    detail = ""
+                    try:
+                        error_data = await response.json()
+                        detail = str((error_data.get("error") or {}).get("message") or "").strip()
+                    except Exception:
+                        detail = ""
                     self.last_outcome = "http_error"
                     self.last_detail = f"Gemini returned HTTP {response.status}."
+                    if detail:
+                        self.last_detail += f" {detail[:1000]}"
                     return None
                 data = await response.json()
         except Exception as exc:
