@@ -209,9 +209,10 @@ class GeminiTicketBatchReviewer:
             "contents": [{"role": "user", "parts": [{"text": self.build_prompt(tickets)}]}],
             "generationConfig": {
                 "temperature": 0.1,
-                "maxOutputTokens": min(8192, max(1024, len(tickets) * 220)),
+                "maxOutputTokens": min(65536, max(2048, len(tickets) * 350)),
                 "responseMimeType": "application/json",
                 "responseSchema": schema,
+                "thinkingConfig": {"thinkingLevel": "minimal"},
             },
         }
         model = self.model.removeprefix("models/")
@@ -242,16 +243,33 @@ class GeminiTicketBatchReviewer:
             logger.warning("Gemini ticket batch review failed.", exc_info=True)
             return None
 
+        finish_reason = "unknown"
         try:
-            content = "".join(
+            candidate = data["candidates"][0]
+            finish_reason = str(candidate.get("finishReason") or "unknown")
+            parts = candidate["content"]["parts"]
+            final_parts = [
                 str(part.get("text") or "")
-                for part in data["candidates"][0]["content"]["parts"]
-                if isinstance(part, typing.Mapping)
-            )
-            results = json.loads(content)["tickets"]
+                for part in parts
+                if isinstance(part, typing.Mapping) and not part.get("thought")
+            ]
+            content = "".join(final_parts).strip()
+            if content.startswith("```"):
+                content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.I)
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError:
+                start = content.find("{")
+                if start < 0:
+                    raise
+                parsed, _ = json.JSONDecoder().raw_decode(content[start:])
+            results = parsed["tickets"]
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError):
             self.last_outcome = "invalid_response"
-            self.last_detail = "Gemini returned an invalid batch review response."
+            self.last_detail = (
+                "Gemini returned an invalid batch review response "
+                f"(finish reason: {finish_reason})."
+            )
             return None
         allowed_ids = {str(ticket.get("id")) for ticket in tickets}
         decisions = {}

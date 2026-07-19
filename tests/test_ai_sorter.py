@@ -44,9 +44,16 @@ class FakeSession:
         return self.response
 
 
-def gemini_response(value):
+def gemini_response(value, *, thought="", fenced=False):
+    output = json.dumps(value)
+    if fenced:
+        output = f"```json\n{output}\n```"
+    parts = []
+    if thought:
+        parts.append({"thought": True, "text": thought})
+    parts.append({"text": output})
     return {
-        "candidates": [{"content": {"parts": [{"text": json.dumps(value)}]}}]
+        "candidates": [{"finishReason": "STOP", "content": {"parts": parts}}]
     }
 
 
@@ -108,7 +115,7 @@ class GeminiTicketBatchReviewerTests(unittest.IsolatedAsyncioTestCase):
                             "ticket_name": "Ramp Agent application",
                         },
                     ]
-                }),
+                }, thought="Internal reasoning that is not JSON.", fenced=True),
             )
         )
         reviewer = GeminiTicketBatchReviewer(session, "secret")
@@ -126,6 +133,10 @@ class GeminiTicketBatchReviewerTests(unittest.IsolatedAsyncioTestCase):
             GEMINI_GENERATE_CONTENT_URL.format(model="gemini-3.5-flash"),
         )
         self.assertEqual(request["headers"], {"x-goog-api-key": "secret"})
+        self.assertEqual(
+            request["json"]["generationConfig"]["thinkingConfig"],
+            {"thinkingLevel": "minimal"},
+        )
         prompt = request["json"]["contents"][0]["parts"][0]["text"]
         self.assertIn('"id": "100"', prompt)
         self.assertIn('"id": "200"', prompt)
