@@ -71,9 +71,11 @@ class GeminiTicketBatchReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[STAFF MESSAGE]\nWhat happened?", transcript)
         self.assertIn("[BOT OR AI MESSAGE]\nAutomated reply", transcript)
 
-    def test_only_unnamed_tickets_are_rename_eligible(self):
+    def test_only_unnamed_or_unclaimed_tickets_are_rename_eligible(self):
         self.assertTrue(ticket_is_rename_eligible("unnamed"))
         self.assertTrue(ticket_is_rename_eligible("ticket-unnamed"))
+        self.assertTrue(ticket_is_rename_eligible("unclaimed"))
+        self.assertTrue(ticket_is_rename_eligible("ticket-unclaimed"))
         self.assertFalse(ticket_is_rename_eligible("manually-named"))
         self.assertFalse(
             ticket_is_rename_eligible(

@@ -135,9 +135,14 @@ def ticket_is_rename_eligible(
     general_category_id: typing.Union[int, str, None] = None,
     category_name: str = "",
 ) -> bool:
-    """Allow AI renaming only for unnamed tickets."""
+    """Allow AI renaming only for unnamed or unclaimed tickets."""
     normalized_name = re.sub(r"[\s_]+", "-", str(channel_name or "").casefold()).strip("-")
-    return normalized_name in {"unnamed", "ticket-unnamed"}
+    return normalized_name in {
+        "unnamed",
+        "ticket-unnamed",
+        "unclaimed",
+        "ticket-unclaimed",
+    }
 
 
 class GeminiTicketBatchReviewer:

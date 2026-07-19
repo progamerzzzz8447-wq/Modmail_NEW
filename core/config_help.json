@@ -45,7 +45,7 @@
   },
   "ai_sort_enabled": {
     "default": "Yes",
-    "description": "Reviews all open tickets in one Gemini request at 06:00 and 18:25 Europe/London time, summarizes active inquiries, suggests replies, and alerts subscribers.",
+    "description": "Reviews all open tickets in one Gemini request at 06:00 and 18:25 Europe/London time, summarizes active inquiries, logs suggested replies, and renames unnamed or unclaimed tickets without pinging anyone.",
     "examples": [
       "`{prefix}config set ai_sort_enabled yes`",
       "`{prefix}config set ai_sort_enabled no`"
@@ -65,7 +65,7 @@
   },
   "ai_sort_log_channel_id": {
     "default": "`1528151308799049921`",
-    "description": "The former Groq staff channel that receives every Gemini summary, suggested reply, action, reminder result, and error.",
+    "description": "The former Groq staff channel that receives every Gemini summary, suggested reply, rename result, and error.",
     "examples": [
       "`{prefix}config set ai_sort_log_channel_id 1528151308799049921`"
     ],

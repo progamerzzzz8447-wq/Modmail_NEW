@@ -206,30 +206,6 @@ class Modmail(commands.Cog):
         except Exception:
             logger.warning("Could not write an AI sort audit entry.", exc_info=True)
 
-    async def _send_ai_sort_subscriber_reminder(self, thread, channel, suggested_reply: str) -> str:
-        """Ping ticket subscribers with Gemini's suggested staff reply."""
-        subscribers = self.bot.config["subscriptions"].get(str(thread.id), [])
-        mentions = " ".join(dict.fromkeys(subscribers))
-        if not mentions:
-            return "Awaiting staff, but no users or roles are subscribed"
-        reminder_text = self.bot.config.get("recipient_reply_reminder_text")
-        suggestion = (suggested_reply.strip() or "No safe suggested reply was generated.").replace(
-            "```", "'''"
-        )
-        try:
-            await channel.send(
-                f"{mentions} {reminder_text}\n\n**Suggested reply:**\n```\n{suggestion[:1500]}\n```",
-                allowed_mentions=discord.AllowedMentions(
-                    users=True,
-                    roles=True,
-                    everyone=True,
-                ),
-            )
-        except Exception as exc:
-            logger.warning("Gemini review subscriber ping failed for %s.", channel.id, exc_info=True)
-            return f"Subscriber ping failed: {type(exc).__name__}"
-        return f"Pinged {len(dict.fromkeys(subscribers))} subscription(s)"
-
     async def _run_ai_sort(self, *, trigger: str, only_thread=None) -> Tuple[int, int]:
         """Review every open ticket using exactly one Gemini API request."""
         api_key = self.bot.config.get("gemini_api_key", convert=False)
@@ -323,20 +299,19 @@ class Modmail(commands.Cog):
                         actions.append(f"Rename failed: {type(exc).__name__}")
                 else:
                     actions.append("Existing ticket name preserved")
-                if decision["status"] == "awaiting_staff":
-                    ping_status = await self._send_ai_sort_subscriber_reminder(
-                        thread, channel, decision["suggested_reply"]
-                    )
-                else:
-                    ping_status = "No ping; not awaiting staff"
+                suggested_reply = (
+                    decision["suggested_reply"]
+                    if decision["status"] == "awaiting_staff"
+                    else "None — the ticket is not awaiting a staff reply"
+                )
                 await self._log_ai_sort(
                     "Gemini ticket review", channel.mention,
                     fields=[
                         ("Status", decision["status"]),
                         ("Active inquiry summary", decision["summary"] or "No unresolved inquiry"),
-                        ("Suggested reply", decision["suggested_reply"] or "None"),
+                        ("Suggested reply", suggested_reply or "No safe suggestion generated"),
                         ("Actions", "\n".join(actions)),
-                        ("Subscriber ping", ping_status),
+                        ("Ticket notification", "None — review logs only; nobody was pinged"),
                     ],
                 )
                 succeeded += 1
