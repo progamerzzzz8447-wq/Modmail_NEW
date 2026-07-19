@@ -1,12 +1,13 @@
 import asyncio
 import re
 import secrets
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, time as datetime_time, timezone, timedelta
 from io import BytesIO
 from itertools import zip_longest
 from typing import Optional, Union, List, Tuple, Literal
 import logging
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import discord
 from discord.ext import commands
@@ -46,6 +47,7 @@ from core.ai_reviewer import (
     last_relayed_message_is_human_staff,
     parse_aireply_argument,
 )
+from core.ai_sorter import DEFAULT_GROQ_SORT_MODEL, GroqTicketSorter, build_sorting_transcript
 from core.models import DMDisabled, PermissionLevel, SimilarCategoryConverter, getLogger
 from core.paginator import EmbedPaginatorSession
 from core.thread import Thread
@@ -56,6 +58,10 @@ logger = getLogger(__name__)
 
 MANUAL_AI_ROLE_IDS = (1391515982417100951, 1516405254571298866)
 DEFAULT_SMART_AI_CONTEXT_PATH = Path(__file__).resolve().parent.parent / "core" / "smart_ai_context.md"
+AI_SORT_TIMES = (
+    datetime_time(hour=6, tzinfo=ZoneInfo("Europe/London")),
+    datetime_time(hour=18, tzinfo=ZoneInfo("Europe/London")),
+)
 
 
 class Modmail(commands.Cog):
@@ -64,6 +70,7 @@ class Modmail(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self._snoozed_cache = []
+        self._ai_sort_lock = asyncio.Lock()
         self._auto_unsnooze_task = self.bot.loop.create_task(self.auto_unsnooze_task())
 
     @commands.Cog.listener()
@@ -164,6 +171,254 @@ class Modmail(commands.Cog):
     @unanswered_reply_reminders.before_loop
     async def before_unanswered_reply_reminders(self):
         await self.bot.wait_until_ready()
+
+    async def _log_ai_sort(self, title: str, description: str, *, fields=None, error=False) -> None:
+        """Write a Groq sorting audit entry to the configured staff channel."""
+        channel_id = self.bot.config.get("ai_sort_log_channel_id", convert=False)
+        try:
+            channel_id = int(channel_id)
+        except (TypeError, ValueError):
+            logger.warning("AI sort log channel is not configured.")
+            return
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except Exception:
+                logger.warning("Could not fetch AI sort log channel %s.", channel_id, exc_info=True)
+                return
+        embed = discord.Embed(
+            title=title,
+            description=description[:4_096],
+            color=self.bot.error_color if error else self.bot.main_color,
+            timestamp=datetime.now(timezone.utc),
+        )
+        for name, value in fields or ():
+            embed.add_field(name=str(name)[:256], value=str(value or "—")[:1_024], inline=False)
+        try:
+            await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+        except Exception:
+            logger.warning("Could not write an AI sort audit entry.", exc_info=True)
+
+    async def _fetch_ai_sort_categories(self) -> List[discord.CategoryChannel]:
+        """Fetch the guild's current category list, falling back to cache on API failure."""
+        try:
+            channels = await self.bot.modmail_guild.fetch_channels()
+        except Exception:
+            logger.warning("Could not fetch live categories for AI sorting; using cache.", exc_info=True)
+            channels = self.bot.modmail_guild.categories
+        return [channel for channel in channels if isinstance(channel, discord.CategoryChannel)]
+
+    async def _sort_one_ticket(
+        self,
+        thread,
+        sorter: GroqTicketSorter,
+        categories: List[discord.CategoryChannel],
+        *,
+        trigger: str,
+    ) -> bool:
+        """Sort one ticket, ping subscribers when waiting, and record every result."""
+        channel = getattr(thread, "channel", None)
+        if not isinstance(channel, discord.TextChannel):
+            return False
+        try:
+            log_entry = await self.bot.api.get_log(channel.id)
+            if not log_entry:
+                raise RuntimeError("Ticket log was not found.")
+            log_messages = log_entry.get("messages") or []
+            transcript = build_sorting_transcript(
+                log_messages,
+                bot_user_id=self.bot.user.id,
+            )
+            category_data = [
+                {"id": str(category.id), "name": category.name}
+                for category in categories
+            ]
+            decision = await sorter.sort(
+                transcript,
+                category_data,
+                current_category_id=channel.category_id,
+            )
+        except Exception as exc:
+            await self._log_ai_sort(
+                "Groq ticket sort failed",
+                channel.mention,
+                fields=[("Trigger", trigger), ("Error", f"{type(exc).__name__}: {exc}")],
+                error=True,
+            )
+            logger.warning("AI sorting failed for channel %s.", channel.id, exc_info=True)
+            return False
+
+        if decision is None:
+            await self._log_ai_sort(
+                "Groq ticket sort skipped",
+                channel.mention,
+                fields=[("Trigger", trigger), ("Reason", sorter.last_detail)],
+                error=True,
+            )
+            return False
+
+        target = discord.utils.get(categories, id=int(decision["category_id"]))
+        old_name = channel.name
+        old_category = channel.category
+        actions = []
+        try:
+            if channel.name != decision["ticket_name"]:
+                await channel.edit(
+                    name=decision["ticket_name"],
+                    reason=f"Groq ticket sort ({trigger})",
+                )
+                actions.append(f"Renamed `{old_name}` → `{decision['ticket_name']}`")
+        except Exception as exc:
+            actions.append(f"Rename failed: {type(exc).__name__}")
+            logger.warning("Groq ticket rename failed for %s.", channel.id, exc_info=True)
+
+        if target is not None and channel.category_id != target.id:
+            try:
+                await channel.move(
+                    category=target,
+                    end=True,
+                    sync_permissions=True,
+                    reason=f"Groq ticket sort ({trigger})",
+                )
+                actions.append(
+                    f"Moved `{getattr(old_category, 'name', 'No category')}` → `{target.name}`"
+                )
+            except Exception as exc:
+                actions.append(f"Move to `{target.name}` failed: {type(exc).__name__}")
+                logger.warning("Groq ticket category move failed for %s.", channel.id, exc_info=True)
+        elif target is not None:
+            actions.append(f"Kept in `{target.name}`")
+
+        awaiting_staff = (
+            last_relayed_message_is_human_staff(
+                log_messages,
+                bot_user_id=self.bot.user.id,
+            )
+            is False
+        )
+        ping_status = "Not awaiting a human staff reply"
+        if awaiting_staff:
+            subscribers = self.bot.config["subscriptions"].get(str(thread.id), [])
+            mentions = " ".join(dict.fromkeys(subscribers))
+            if mentions:
+                reminder_text = self.bot.config.get("recipient_reply_reminder_text")
+                try:
+                    await channel.send(
+                        f"{mentions} {reminder_text}",
+                        allowed_mentions=discord.AllowedMentions(
+                            users=True,
+                            roles=True,
+                            everyone=True,
+                        ),
+                    )
+                    ping_status = f"Pinged {len(dict.fromkeys(subscribers))} subscription(s)"
+                except Exception as exc:
+                    ping_status = f"Subscriber ping failed: {type(exc).__name__}"
+                    logger.warning("AI sort subscriber ping failed for %s.", channel.id, exc_info=True)
+            else:
+                ping_status = "Awaiting staff, but no users or roles are subscribed"
+
+        await self._log_ai_sort(
+            "Groq ticket sorted",
+            channel.mention,
+            fields=[
+                ("Trigger", trigger),
+                ("Model", sorter.model),
+                ("Category decision", getattr(target, "name", decision["category_id"])),
+                ("Reason", decision.get("reason") or "No reason returned"),
+                ("Actions", "\n".join(actions) or "No channel changes required"),
+                ("Reply status", ping_status),
+            ],
+        )
+        return True
+
+    async def _run_ai_sort(self, *, trigger: str, only_thread=None) -> Tuple[int, int]:
+        """Run a serialized Groq sorting pass over one or every open cached thread."""
+        api_key = self.bot.config.get("groq_api_key", convert=False)
+        if not api_key or self.bot.session is None:
+            await self._log_ai_sort(
+                "Groq ticket sort unavailable",
+                "`GROQ_API_KEY` is not configured, so no tickets were changed.",
+                fields=[("Trigger", trigger)],
+                error=True,
+            )
+            raise commands.CommandError("Groq API credentials are not configured.")
+
+        async with self._ai_sort_lock:
+            categories = await self._fetch_ai_sort_categories()
+            sorter = GroqTicketSorter(
+                self.bot.session,
+                str(api_key),
+                model=str(self.bot.config.get("groq_model") or DEFAULT_GROQ_SORT_MODEL),
+            )
+            if only_thread is not None:
+                threads = [only_thread]
+            else:
+                await self.bot.threads.populate_cache()
+                unique = {}
+                for thread in self.bot.threads.cache.values():
+                    channel = getattr(thread, "channel", None)
+                    if (
+                        isinstance(channel, discord.TextChannel)
+                        and not getattr(thread, "snoozed", False)
+                        and not getattr(thread, "cancelled", False)
+                        and channel.name != "resolved"
+                    ):
+                        unique[channel.id] = thread
+                threads = list(unique.values())
+
+            succeeded = 0
+            for thread in threads:
+                if await self._sort_one_ticket(thread, sorter, categories, trigger=trigger):
+                    succeeded += 1
+            await self._log_ai_sort(
+                "Groq sorting pass complete",
+                f"Processed {len(threads)} ticket(s); {succeeded} completed successfully.",
+                fields=[("Trigger", trigger), ("Model", sorter.model)],
+                error=succeeded != len(threads),
+            )
+            return succeeded, len(threads)
+
+    @tasks.loop(time=AI_SORT_TIMES)
+    async def scheduled_ai_sort(self):
+        """Sort every open ticket at 06:00 and 18:00 Europe/London time."""
+        if not self.bot.config.get("ai_sort_enabled"):
+            return
+        try:
+            await self._run_ai_sort(trigger="scheduled 06:00/18:00 Europe/London")
+        except Exception:
+            logger.error("Scheduled Groq ticket sorting failed.", exc_info=True)
+
+    @scheduled_ai_sort.before_loop
+    async def before_scheduled_ai_sort(self):
+        await self.bot.wait_until_ready()
+
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
+    async def aisort(self, ctx):
+        """Run the Groq sorter over every open ticket."""
+        status = await ctx.send("Running the Groq sorter over all open tickets…")
+        succeeded, total = await self._run_ai_sort(
+            trigger=f"manual aisort by {ctx.author} ({ctx.author.id})"
+        )
+        await status.edit(content=f"Groq sorting complete: {succeeded}/{total} ticket(s) sorted.")
+
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
+    @checks.thread_only()
+    async def aisort1(self, ctx):
+        """Run the Groq sorter only for the current ticket."""
+        succeeded, _ = await self._run_ai_sort(
+            trigger=f"manual aisort1 by {ctx.author} ({ctx.author.id})",
+            only_thread=ctx.thread,
+        )
+        if succeeded:
+            await ctx.send("This ticket has been sorted by Groq.")
+        else:
+            await ctx.send("Groq could not sort this ticket. Check the AI sorting log channel.")
 
     async def auto_unsnooze_task(self):
         await self.bot.wait_until_ready()
@@ -2159,6 +2414,7 @@ class Modmail(commands.Cog):
                 author_name="AI assistant",
                 footer_text=AI_HELLO_FOOTER,
             )
+            await ctx.thread._move_to_ai_general_support()
 
         await ctx.thread._log_ai_check(
             ctx.message,
@@ -2398,7 +2654,9 @@ class Modmail(commands.Cog):
                 "staff context guides the draft.\n"
                 f"`{prefix}aiall` — Answer any unresolved question, then send the closure warning.\n"
                 f"`{prefix}annoyautoreply` — Generate and send the sarcastic response.\n"
-                f"`{prefix}fakeautoreply MESSAGE` — Send your own text using the AI presentation."
+                f"`{prefix}fakeautoreply MESSAGE` — Send your own text using the AI presentation.\n"
+                f"`{prefix}aisort` — Sort every open ticket with Groq.\n"
+                f"`{prefix}aisort1` — Sort only the current ticket with Groq."
             ),
             inline=False,
         )
@@ -3833,10 +4091,12 @@ class Modmail(commands.Cog):
     async def cog_load(self):
         self.snooze_auto_unsnooze.start()
         self.unanswered_reply_reminders.start()
+        self.scheduled_ai_sort.start()
 
     def cog_unload(self):
         self.snooze_auto_unsnooze.cancel()
         self.unanswered_reply_reminders.cancel()
+        self.scheduled_ai_sort.cancel()
         self._auto_unsnooze_task.cancel()
 
     @tasks.loop(seconds=10)

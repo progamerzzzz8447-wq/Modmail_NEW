@@ -43,6 +43,43 @@
       "The Gemini API key is never included in audit logs."
     ]
   },
+  "ai_sort_enabled": {
+    "default": "Yes",
+    "description": "Runs Groq ticket naming, category routing, and awaiting-reply checks at 06:00 and 18:00 Europe/London time.",
+    "examples": [
+      "`{prefix}config set ai_sort_enabled yes`",
+      "`{prefix}config set ai_sort_enabled no`"
+    ],
+    "notes": [
+      "Requires the `GROQ_API_KEY` environment variable."
+    ]
+  },
+  "groq_model": {
+    "default": "`llama-3.1-8b-instant`",
+    "description": "The Groq model used by scheduled and manual AI ticket sorting.",
+    "examples": [
+      "`{prefix}config set groq_model llama-3.1-8b-instant`"
+    ],
+    "notes": []
+  },
+  "ai_sort_log_channel_id": {
+    "default": "`1528151308799049921`",
+    "description": "Staff channel that receives every Groq sorting decision, action, reminder result, and error.",
+    "examples": [
+      "`{prefix}config set ai_sort_log_channel_id 1528151308799049921`"
+    ],
+    "notes": [
+      "The Groq API key is never included in audit logs."
+    ]
+  },
+  "ai_sort_general_category_id": {
+    "default": "`1368989765025927268`",
+    "description": "General Support category used immediately after `?aihi` or a successful automatic autoreply.",
+    "examples": [
+      "`{prefix}config set ai_sort_general_category_id 1368989765025927268`"
+    ],
+    "notes": []
+  },
   "recipient_reply_reminder_delay": {
     "default": "12 hours",
     "description": "How long a recipient follow-up may remain unanswered before subscribed users are pinged in the ticket.",
