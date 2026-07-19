@@ -1098,8 +1098,16 @@ class GeminiTicketSummaryGenerator(GeminiThreadReplyGenerator):
         transcript: str,
         correction: str = "",
         staff_context: str = "",
+        staff_attachment_context: str = "",
+        _schema_retry: bool = False,
     ) -> typing.Optional[str]:
-        reply = await super().generate(transcript, correction, staff_context)
+        reply = await super().generate(
+            transcript,
+            correction,
+            staff_context,
+            staff_attachment_context,
+            _schema_retry,
+        )
         if reply == AI_ALL_NO_ADDITIONAL_ANSWER:
             self.last_detail = "No answerable unanswered questions were found."
             return ""

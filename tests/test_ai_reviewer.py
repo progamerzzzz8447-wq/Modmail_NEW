@@ -651,7 +651,10 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         )
         generator = GeminiTicketSummaryGenerator(session, "test-key")
 
-        reply = await generator.generate("[time] Recipient\nHow is payment handled?")
+        reply = await generator.generate(
+            "[time] Recipient\nHow is payment handled?",
+            staff_attachment_context="",
+        )
 
         self.assertEqual(
             reply,
@@ -680,6 +683,27 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             generator.last_detail,
             "No answerable unanswered questions were found.",
         )
+
+    async def test_all_inquiries_generator_preserves_new_arguments_during_schema_retry(self):
+        session = FakeSession(
+            [
+                FakeResponse(200, {"candidates": []}),
+                FakeResponse(
+                    200,
+                    generate_content_output({"reply": "__NO_UNANSWERED_QUESTION__"}),
+                ),
+            ]
+        )
+        generator = GeminiTicketSummaryGenerator(session, "test-key")
+
+        reply = await generator.generate(
+            "[time] Recipient\nThank you, that answers it.",
+            staff_context="",
+            staff_attachment_context="",
+        )
+
+        self.assertEqual(reply, "")
+        self.assertEqual(session.calls, 2)
 
     async def test_returns_only_a_configured_match(self):
         session = FakeSession(
