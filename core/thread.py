@@ -859,30 +859,6 @@ class Thread:
         except Exception:
             logger.warning("Failed to append an AI autoreply to the ticket log.", exc_info=True)
 
-    async def _move_to_ai_general_support(self) -> bool:
-        """Move an AI-handled ticket into the configured General Support category."""
-        category_id = self.bot.config.get("ai_sort_general_category_id", convert=False)
-        try:
-            category = self.bot.modmail_guild.get_channel(int(category_id))
-        except (TypeError, ValueError):
-            category = None
-        if not isinstance(category, discord.CategoryChannel) or self.channel is None:
-            logger.warning("AI General Support category %s is unavailable.", category_id)
-            return False
-        if self.channel.category_id == category.id:
-            return True
-        try:
-            await self.channel.move(
-                category=category,
-                end=True,
-                sync_permissions=True,
-                reason="AI response routed ticket to General Support",
-            )
-        except Exception:
-            logger.warning("Failed to move AI-handled ticket to General Support.", exc_info=True)
-            return False
-        return True
-
     def _is_ai_autoreply_message(self, message) -> bool:
         """Return whether a bot-authored message uses the AI autoreply footer."""
         if (
@@ -1138,7 +1114,6 @@ class Thread:
         delivery_error = None
         try:
             await self._send_ai_autoreply(selected_name, ROBLOX_GAME_PASS_AUTOREPLY)
-            await self._move_to_ai_general_support()
             delivery_status = (
                 "Automatic game-pass guidance delivered after the connected ticket-opened message."
                 if is_initial_message
@@ -1458,7 +1433,6 @@ class Thread:
                     await self._send_ai_autoreply(selected, response_text)
                 else:
                     await self._execute_ai_alias(selected, alias_action, message)
-                await self._move_to_ai_general_support()
                 if alias_action is not None:
                     delivery_status = f'AI alias `{alias_action["alias"]}` executed in full.'
                     if is_initial_message:

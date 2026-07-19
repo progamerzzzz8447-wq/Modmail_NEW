@@ -45,40 +45,33 @@
   },
   "ai_sort_enabled": {
     "default": "Yes",
-    "description": "Runs Groq ticket naming, category routing, and awaiting-reply checks at 06:00 and 18:00 Europe/London time.",
+    "description": "Reviews all open tickets in one Gemini request at 06:00 and 18:25 Europe/London time, summarizes active inquiries, suggests replies, and alerts subscribers.",
     "examples": [
       "`{prefix}config set ai_sort_enabled yes`",
       "`{prefix}config set ai_sort_enabled no`"
     ],
     "notes": [
-      "Requires the `GROQ_API_KEY` environment variable."
+      "Requires the `GEMINI_API_KEY` environment variable.",
+      "Each complete scheduled pass makes exactly one Gemini API request."
     ]
   },
-  "groq_model": {
-    "default": "`llama-3.1-8b-instant`",
-    "description": "The Groq model used by scheduled and manual AI ticket sorting.",
+  "ai_sort_model": {
+    "default": "`gemini-2.5-flash-lite`",
+    "description": "The Gemini model used by scheduled and manual batch ticket reviews.",
     "examples": [
-      "`{prefix}config set groq_model llama-3.1-8b-instant`"
+      "`{prefix}config set ai_sort_model gemini-2.5-flash-lite`"
     ],
     "notes": []
   },
   "ai_sort_log_channel_id": {
     "default": "`1528151308799049921`",
-    "description": "Staff channel that receives every Groq sorting decision, action, reminder result, and error.",
+    "description": "The former Groq staff channel that receives every Gemini summary, suggested reply, action, reminder result, and error.",
     "examples": [
       "`{prefix}config set ai_sort_log_channel_id 1528151308799049921`"
     ],
     "notes": [
-      "The Groq API key is never included in audit logs."
+      "The Gemini API key is never included in audit logs."
     ]
-  },
-  "ai_sort_general_category_id": {
-    "default": "`1368989765025927268`",
-    "description": "General Support category used immediately after `?aihi` or a successful automatic autoreply.",
-    "examples": [
-      "`{prefix}config set ai_sort_general_category_id 1368989765025927268`"
-    ],
-    "notes": []
   },
   "recipient_reply_reminder_delay": {
     "default": "12 hours",

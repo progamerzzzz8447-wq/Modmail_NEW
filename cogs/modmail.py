@@ -47,7 +47,13 @@ from core.ai_reviewer import (
     last_relayed_message_is_human_staff,
     parse_aireply_argument,
 )
-from core.ai_sorter import DEFAULT_GROQ_SORT_MODEL, GroqTicketSorter, build_sorting_transcript
+from core.ai_sorter import (
+    DEFAULT_GEMINI_REVIEW_MODEL,
+    GeminiTicketBatchReviewer,
+    build_sorting_transcript,
+    latest_conversation_has_closing,
+    ticket_is_rename_eligible,
+)
 from core.models import DMDisabled, PermissionLevel, SimilarCategoryConverter, getLogger
 from core.paginator import EmbedPaginatorSession
 from core.thread import Thread
@@ -60,7 +66,7 @@ MANUAL_AI_ROLE_IDS = (1391515982417100951, 1516405254571298866)
 DEFAULT_SMART_AI_CONTEXT_PATH = Path(__file__).resolve().parent.parent / "core" / "smart_ai_context.md"
 AI_SORT_TIMES = (
     datetime_time(hour=6, tzinfo=ZoneInfo("Europe/London")),
-    datetime_time(hour=18, tzinfo=ZoneInfo("Europe/London")),
+    datetime_time(hour=18, minute=25, tzinfo=ZoneInfo("Europe/London")),
 )
 
 
@@ -173,7 +179,7 @@ class Modmail(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def _log_ai_sort(self, title: str, description: str, *, fields=None, error=False) -> None:
-        """Write a Groq sorting audit entry to the configured staff channel."""
+        """Write a Gemini batch-review audit entry to the former Groq log channel."""
         channel_id = self.bot.config.get("ai_sort_log_channel_id", convert=False)
         try:
             channel_id = int(channel_id)
@@ -200,157 +206,47 @@ class Modmail(commands.Cog):
         except Exception:
             logger.warning("Could not write an AI sort audit entry.", exc_info=True)
 
-    async def _fetch_ai_sort_categories(self) -> List[discord.CategoryChannel]:
-        """Fetch the guild's current category list, falling back to cache on API failure."""
+    async def _send_ai_sort_subscriber_reminder(self, thread, channel, suggested_reply: str) -> str:
+        """Ping ticket subscribers with Gemini's suggested staff reply."""
+        subscribers = self.bot.config["subscriptions"].get(str(thread.id), [])
+        mentions = " ".join(dict.fromkeys(subscribers))
+        if not mentions:
+            return "Awaiting staff, but no users or roles are subscribed"
+        reminder_text = self.bot.config.get("recipient_reply_reminder_text")
+        suggestion = (suggested_reply.strip() or "No safe suggested reply was generated.").replace(
+            "```", "'''"
+        )
         try:
-            channels = await self.bot.modmail_guild.fetch_channels()
-        except Exception:
-            logger.warning("Could not fetch live categories for AI sorting; using cache.", exc_info=True)
-            channels = self.bot.modmail_guild.categories
-        return [channel for channel in channels if isinstance(channel, discord.CategoryChannel)]
-
-    async def _sort_one_ticket(
-        self,
-        thread,
-        sorter: GroqTicketSorter,
-        categories: List[discord.CategoryChannel],
-        *,
-        trigger: str,
-    ) -> bool:
-        """Sort one ticket, ping subscribers when waiting, and record every result."""
-        channel = getattr(thread, "channel", None)
-        if not isinstance(channel, discord.TextChannel):
-            return False
-        try:
-            log_entry = await self.bot.api.get_log(channel.id)
-            if not log_entry:
-                raise RuntimeError("Ticket log was not found.")
-            log_messages = log_entry.get("messages") or []
-            transcript = build_sorting_transcript(
-                log_messages,
-                bot_user_id=self.bot.user.id,
-            )
-            category_data = [
-                {"id": str(category.id), "name": category.name}
-                for category in categories
-            ]
-            decision = await sorter.sort(
-                transcript,
-                category_data,
-                current_category_id=channel.category_id,
+            await channel.send(
+                f"{mentions} {reminder_text}\n\n**Suggested reply:**\n```\n{suggestion[:1500]}\n```",
+                allowed_mentions=discord.AllowedMentions(
+                    users=True,
+                    roles=True,
+                    everyone=True,
+                ),
             )
         except Exception as exc:
-            await self._log_ai_sort(
-                "Groq ticket sort failed",
-                channel.mention,
-                fields=[("Trigger", trigger), ("Error", f"{type(exc).__name__}: {exc}")],
-                error=True,
-            )
-            logger.warning("AI sorting failed for channel %s.", channel.id, exc_info=True)
-            return False
-
-        if decision is None:
-            await self._log_ai_sort(
-                "Groq ticket sort skipped",
-                channel.mention,
-                fields=[("Trigger", trigger), ("Reason", sorter.last_detail)],
-                error=True,
-            )
-            return False
-
-        target = discord.utils.get(categories, id=int(decision["category_id"]))
-        old_name = channel.name
-        old_category = channel.category
-        actions = []
-        try:
-            if channel.name != decision["ticket_name"]:
-                await channel.edit(
-                    name=decision["ticket_name"],
-                    reason=f"Groq ticket sort ({trigger})",
-                )
-                actions.append(f"Renamed `{old_name}` → `{decision['ticket_name']}`")
-        except Exception as exc:
-            actions.append(f"Rename failed: {type(exc).__name__}")
-            logger.warning("Groq ticket rename failed for %s.", channel.id, exc_info=True)
-
-        if target is not None and channel.category_id != target.id:
-            try:
-                await channel.move(
-                    category=target,
-                    end=True,
-                    sync_permissions=True,
-                    reason=f"Groq ticket sort ({trigger})",
-                )
-                actions.append(
-                    f"Moved `{getattr(old_category, 'name', 'No category')}` → `{target.name}`"
-                )
-            except Exception as exc:
-                actions.append(f"Move to `{target.name}` failed: {type(exc).__name__}")
-                logger.warning("Groq ticket category move failed for %s.", channel.id, exc_info=True)
-        elif target is not None:
-            actions.append(f"Kept in `{target.name}`")
-
-        awaiting_staff = (
-            last_relayed_message_is_human_staff(
-                log_messages,
-                bot_user_id=self.bot.user.id,
-            )
-            is False
-        )
-        ping_status = "Not awaiting a human staff reply"
-        if awaiting_staff:
-            subscribers = self.bot.config["subscriptions"].get(str(thread.id), [])
-            mentions = " ".join(dict.fromkeys(subscribers))
-            if mentions:
-                reminder_text = self.bot.config.get("recipient_reply_reminder_text")
-                try:
-                    await channel.send(
-                        f"{mentions} {reminder_text}",
-                        allowed_mentions=discord.AllowedMentions(
-                            users=True,
-                            roles=True,
-                            everyone=True,
-                        ),
-                    )
-                    ping_status = f"Pinged {len(dict.fromkeys(subscribers))} subscription(s)"
-                except Exception as exc:
-                    ping_status = f"Subscriber ping failed: {type(exc).__name__}"
-                    logger.warning("AI sort subscriber ping failed for %s.", channel.id, exc_info=True)
-            else:
-                ping_status = "Awaiting staff, but no users or roles are subscribed"
-
-        await self._log_ai_sort(
-            "Groq ticket sorted",
-            channel.mention,
-            fields=[
-                ("Trigger", trigger),
-                ("Model", sorter.model),
-                ("Category decision", getattr(target, "name", decision["category_id"])),
-                ("Reason", decision.get("reason") or "No reason returned"),
-                ("Actions", "\n".join(actions) or "No channel changes required"),
-                ("Reply status", ping_status),
-            ],
-        )
-        return True
+            logger.warning("Gemini review subscriber ping failed for %s.", channel.id, exc_info=True)
+            return f"Subscriber ping failed: {type(exc).__name__}"
+        return f"Pinged {len(dict.fromkeys(subscribers))} subscription(s)"
 
     async def _run_ai_sort(self, *, trigger: str, only_thread=None) -> Tuple[int, int]:
-        """Run a serialized Groq sorting pass over one or every open cached thread."""
-        api_key = self.bot.config.get("groq_api_key", convert=False)
+        """Review every open ticket using exactly one Gemini API request."""
+        api_key = self.bot.config.get("gemini_api_key", convert=False)
         if not api_key or self.bot.session is None:
             await self._log_ai_sort(
-                "Groq ticket sort unavailable",
-                "`GROQ_API_KEY` is not configured, so no tickets were changed.",
+                "Gemini ticket review unavailable",
+                "`GEMINI_API_KEY` is not configured, so no tickets were reviewed.",
                 fields=[("Trigger", trigger)],
                 error=True,
             )
-            raise commands.CommandError("Groq API credentials are not configured.")
+            raise commands.CommandError("Gemini API credentials are not configured.")
 
         async with self._ai_sort_lock:
-            categories = await self._fetch_ai_sort_categories()
-            sorter = GroqTicketSorter(
+            reviewer = GeminiTicketBatchReviewer(
                 self.bot.session,
                 str(api_key),
-                model=str(self.bot.config.get("groq_model") or DEFAULT_GROQ_SORT_MODEL),
+                model=str(self.bot.config.get("ai_sort_model") or DEFAULT_GEMINI_REVIEW_MODEL),
             )
             if only_thread is not None:
                 threads = [only_thread]
@@ -363,32 +259,99 @@ class Modmail(commands.Cog):
                         isinstance(channel, discord.TextChannel)
                         and not getattr(thread, "snoozed", False)
                         and not getattr(thread, "cancelled", False)
-                        and channel.name != "resolved"
                     ):
                         unique[channel.id] = thread
                 threads = list(unique.values())
 
-            succeeded = 0
+            ticket_data = []
+            contexts = {}
             for thread in threads:
-                if await self._sort_one_ticket(thread, sorter, categories, trigger=trigger):
-                    succeeded += 1
+                channel = thread.channel
+                try:
+                    log_entry = await self.bot.api.get_log(channel.id)
+                    log_messages = (log_entry or {}).get("messages") or []
+                except Exception:
+                    logger.warning("Could not load ticket %s for Gemini review.", channel.id, exc_info=True)
+                    continue
+                transcript = build_sorting_transcript(log_messages, bot_user_id=self.bot.user.id)
+                if not transcript:
+                    continue
+                ticket_id = str(channel.id)
+                ticket_data.append({
+                    "id": ticket_id,
+                    "channel_name": channel.name,
+                    "channel_topic": channel.topic or "",
+                    "category_id": str(channel.category_id or ""),
+                    "category_name": getattr(channel.category, "name", ""),
+                    "recipient_id": str(getattr(getattr(thread, "recipient", None), "id", "")),
+                    "known_resolved": latest_conversation_has_closing(
+                        log_messages, AI_ALL_CLOSING
+                    ),
+                    "latest_human_message_is_staff": last_relayed_message_is_human_staff(
+                        log_messages, bot_user_id=self.bot.user.id
+                    ),
+                    "transcript": transcript,
+                })
+                contexts[ticket_id] = (thread, channel)
+
+            decisions = await reviewer.review(ticket_data)
+            if decisions is None:
+                await self._log_ai_sort(
+                    "Gemini batch review failed", reviewer.last_detail,
+                    fields=[("Trigger", trigger), ("Model", reviewer.model), ("API requests", "1")],
+                    error=True,
+                )
+                return 0, len(threads)
+
+            succeeded = 0
+            for ticket_id, decision in decisions.items():
+                thread, channel = contexts[ticket_id]
+                actions = []
+                if ticket_is_rename_eligible(channel.name):
+                    try:
+                        await channel.edit(
+                            name=decision["ticket_name"],
+                            reason=f"Gemini ticket review ({trigger})",
+                        )
+                        actions.append(f"Renamed to `{decision['ticket_name']}`")
+                    except Exception as exc:
+                        actions.append(f"Rename failed: {type(exc).__name__}")
+                else:
+                    actions.append("Existing ticket name preserved")
+                if decision["status"] == "awaiting_staff":
+                    ping_status = await self._send_ai_sort_subscriber_reminder(
+                        thread, channel, decision["suggested_reply"]
+                    )
+                else:
+                    ping_status = "No ping; not awaiting staff"
+                await self._log_ai_sort(
+                    "Gemini ticket review", channel.mention,
+                    fields=[
+                        ("Status", decision["status"]),
+                        ("Active inquiry summary", decision["summary"] or "No unresolved inquiry"),
+                        ("Suggested reply", decision["suggested_reply"] or "None"),
+                        ("Actions", "\n".join(actions)),
+                        ("Subscriber ping", ping_status),
+                    ],
+                )
+                succeeded += 1
             await self._log_ai_sort(
-                "Groq sorting pass complete",
+                "Gemini batch review complete",
                 f"Processed {len(threads)} ticket(s); {succeeded} completed successfully.",
-                fields=[("Trigger", trigger), ("Model", sorter.model)],
-                error=succeeded != len(threads),
+                fields=[("Trigger", trigger), ("Model", reviewer.model), ("API requests", "1")],
+                error=False,
             )
             return succeeded, len(threads)
 
     @tasks.loop(time=AI_SORT_TIMES)
     async def scheduled_ai_sort(self):
-        """Sort every open ticket at 06:00 and 18:00 Europe/London time."""
+        """Review tickets at 06:00 and 18:25 Europe/London time."""
         if not self.bot.config.get("ai_sort_enabled"):
             return
         try:
-            await self._run_ai_sort(trigger="scheduled 06:00/18:00 Europe/London")
+            await self._run_ai_sort(trigger="scheduled 06:00/18:25 Europe/London")
         except Exception:
-            logger.error("Scheduled Groq ticket sorting failed.", exc_info=True)
+            logger.error("Scheduled Gemini ticket review failed.", exc_info=True)
 
     @scheduled_ai_sort.before_loop
     async def before_scheduled_ai_sort(self):
@@ -398,27 +361,27 @@ class Modmail(commands.Cog):
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     async def aisort(self, ctx):
-        """Run the Groq sorter over every open ticket."""
-        status = await ctx.send("Running the Groq sorter over all open tickets…")
+        """Run one Gemini batch review over every open ticket."""
+        status = await ctx.send("Running one Gemini request for all open tickets…")
         succeeded, total = await self._run_ai_sort(
             trigger=f"manual aisort by {ctx.author} ({ctx.author.id})"
         )
-        await status.edit(content=f"Groq sorting complete: {succeeded}/{total} ticket(s) sorted.")
+        await status.edit(content=f"Gemini review complete: {succeeded}/{total} ticket(s) reviewed.")
 
     @commands.command()
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def aisort1(self, ctx):
-        """Run the Groq sorter only for the current ticket."""
+        """Run one Gemini review request for the current ticket."""
         succeeded, _ = await self._run_ai_sort(
             trigger=f"manual aisort1 by {ctx.author} ({ctx.author.id})",
             only_thread=ctx.thread,
         )
         if succeeded:
-            await ctx.send("This ticket has been sorted by Groq.")
+            await ctx.send("This ticket has been reviewed by Gemini.")
         else:
-            await ctx.send("Groq could not sort this ticket. Check the AI sorting log channel.")
+            await ctx.send("Gemini could not review this ticket. Check the AI review log channel.")
 
     async def auto_unsnooze_task(self):
         await self.bot.wait_until_ready()
@@ -2414,7 +2377,6 @@ class Modmail(commands.Cog):
                 author_name="AI assistant",
                 footer_text=AI_HELLO_FOOTER,
             )
-            await ctx.thread._move_to_ai_general_support()
 
         await ctx.thread._log_ai_check(
             ctx.message,
@@ -2655,8 +2617,8 @@ class Modmail(commands.Cog):
                 f"`{prefix}aiall` — Answer any unresolved question, then send the closure warning.\n"
                 f"`{prefix}annoyautoreply` — Generate and send the sarcastic response.\n"
                 f"`{prefix}fakeautoreply MESSAGE` — Send your own text using the AI presentation.\n"
-                f"`{prefix}aisort` — Sort every open ticket with Groq.\n"
-                f"`{prefix}aisort1` — Sort only the current ticket with Groq."
+                f"`{prefix}aisort` — Review every open ticket in one Gemini request.\n"
+                f"`{prefix}aisort1` — Review only the current ticket with Gemini."
             ),
             inline=False,
         )

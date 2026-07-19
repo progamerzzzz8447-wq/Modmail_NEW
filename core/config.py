@@ -45,11 +45,10 @@ class ConfigManager:
         "gemini_model": "gemini-3.1-flash-lite",
         "gemini_log_channel_id": "1526602233737773146",
         "smart_ai_context": "",
-        # Groq ticket sorting
+        # Scheduled Gemini batch ticket reviews
         "ai_sort_enabled": True,
-        "groq_model": "llama-3.1-8b-instant",
+        "ai_sort_model": "gemini-2.5-flash-lite",
         "ai_sort_log_channel_id": "1528151308799049921",
-        "ai_sort_general_category_id": "1368989765025927268",
         # recipient reply reminders
         "recipient_reply_reminder_delay": 43_200,
         "recipient_reply_reminder_text": (
@@ -233,8 +232,6 @@ class ConfigManager:
         "github_token": None,
         # Gemini API credentials must only be supplied via the environment.
         "gemini_api_key": None,
-        # Groq API credentials must only be supplied via the environment.
-        "groq_api_key": None,
         "disable_autoupdates": False,
         "disable_updates": False,
         # Logging
