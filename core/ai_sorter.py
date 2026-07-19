@@ -15,7 +15,7 @@ else:
 GEMINI_GENERATE_CONTENT_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
-DEFAULT_GEMINI_REVIEW_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_GEMINI_REVIEW_MODEL = "gemini-3.5-flash"
 
 
 def latest_recipient_message(

@@ -47,7 +47,7 @@ class ConfigManager:
         "smart_ai_context": "",
         # Scheduled Gemini batch ticket reviews
         "ai_sort_enabled": True,
-        "ai_sort_model": "gemini-2.5-flash-lite",
+        "ai_sort_model": "gemini-3.5-flash",
         "ai_sort_log_channel_id": "1528151308799049921",
         # recipient reply reminders
         "recipient_reply_reminder_delay": 43_200,

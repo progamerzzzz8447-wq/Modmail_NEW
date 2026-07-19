@@ -123,7 +123,7 @@ class GeminiTicketBatchReviewerTests(unittest.IsolatedAsyncioTestCase):
         url, request = session.requests[0]
         self.assertEqual(
             url,
-            GEMINI_GENERATE_CONTENT_URL.format(model="gemini-2.5-flash-lite"),
+            GEMINI_GENERATE_CONTENT_URL.format(model="gemini-3.5-flash"),
         )
         self.assertEqual(request["headers"], {"x-goog-api-key": "secret"})
         prompt = request["json"]["contents"][0]["parts"][0]["text"]

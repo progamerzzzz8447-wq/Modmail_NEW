@@ -243,10 +243,15 @@ class Modmail(commands.Cog):
             raise commands.CommandError("Gemini API credentials are not configured.")
 
         async with self._ai_sort_lock:
+            configured_model = str(
+                self.bot.config.get("ai_sort_model") or DEFAULT_GEMINI_REVIEW_MODEL
+            )
+            if configured_model == "gemini-2.5-flash-lite":
+                configured_model = DEFAULT_GEMINI_REVIEW_MODEL
             reviewer = GeminiTicketBatchReviewer(
                 self.bot.session,
                 str(api_key),
-                model=str(self.bot.config.get("ai_sort_model") or DEFAULT_GEMINI_REVIEW_MODEL),
+                model=configured_model,
             )
             if only_thread is not None:
                 threads = [only_thread]
