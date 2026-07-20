@@ -1191,6 +1191,14 @@ class ModmailBot(commands.Bot):
                 await self.add_reaction(message, blocked_emoji)
                 return await message.channel.send(embed=embed)
 
+        if (
+            thread
+            and message.id in getattr(thread, "_intake_message_ids", set())
+            and not getattr(message, "_combined_intake", False)
+        ):
+            await self.add_reaction(message, sent_emoji)
+            return
+
         if not thread.cancelled:
             try:
                 await thread.send(message)

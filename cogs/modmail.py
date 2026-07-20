@@ -94,7 +94,7 @@ class Modmail(commands.Cog):
         # considered here so different autoreply types can each run once in the same ticket.
         if getattr(thread, "_initial_message_id", None) != getattr(message, "id", None):
             try:
-                await thread.consider_ai_autoreply(message)
+                await thread.run_ai_intake_workflow(message, opening=False)
             except Exception:
                 logger.warning(
                     "AI ticket review failed for a recipient follow-up.",

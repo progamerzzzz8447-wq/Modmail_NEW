@@ -4,6 +4,7 @@ import base64
 import functools
 import io
 import re
+import secrets
 import time
 import traceback
 import typing
@@ -23,9 +24,13 @@ from lottie.exporters import exporters as l_exporters
 
 from core.abuse_filter import ABUSE_AUTO_CLOSE_MESSAGE, contains_abusive_language
 from core.ai_reviewer import (
+    AI_ALL_CLOSING,
+    AI_HELLO_FOOTER,
+    AI_HELLO_MESSAGES,
     AI_REPLY_FOOTER,
     ROBLOX_GAME_PASS_AUTOREPLY,
     GeminiAutoReplyReviewer,
+    GeminiIntakeAssessment,
     build_autoreply_context,
     build_ticket_text,
     describe_ai_error,
@@ -94,6 +99,10 @@ class Thread:
         self._dm_menu_msg_id = None
         self._dm_menu_channel_id = None
         self._initial_message_id = None
+        self._intake_message_ids = set()
+        self._opening_workflow_active = False
+        self._opening_autoreply_sent = False
+        self._opening_alias_subscribed = False
         self._ai_review_lock = asyncio.Lock()
         self._abuse_close_lock = asyncio.Lock()
         # --- SNOOZE STATE ---
@@ -1053,6 +1062,8 @@ class Thread:
             return
 
         async with self._ai_review_lock:
+            self._opening_autoreply_sent = False
+            self._opening_alias_subscribed = False
             if not self.bot.config.get("gemini_ai_enabled"):
                 return
 
@@ -1067,6 +1078,148 @@ class Thread:
             if not self._matches_ai_autoreply_trigger(ticket_text):
                 return
             await self._run_ai_review(message, ticket_text)
+
+    async def _collect_opening_intake(self, initial_message, delay: float = 10.0):
+        """Acknowledge immediately, then combine recipient DMs received during the intake window."""
+        receipt = await send_ticket_opened(self.recipient)
+        if self.bot.config.get("recipient_thread_close") and receipt is not None:
+            close_emoji = await self.bot.convert_emoji(self.bot.config["close_emoji"])
+            await self.bot.add_reaction(receipt, close_emoji)
+        await asyncio.sleep(delay)
+
+        messages = []
+        try:
+            async for candidate in initial_message.channel.history(
+                limit=50,
+                after=initial_message.created_at - timedelta(seconds=1),
+                oldest_first=True,
+            ):
+                if candidate.author.id == self.id and candidate.created_at <= discord.utils.utcnow():
+                    messages.append(candidate)
+        except Exception:
+            logger.warning("Could not read the complete opening intake; using the first DM.", exc_info=True)
+        if not any(getattr(item, "id", None) == initial_message.id for item in messages):
+            messages.insert(0, initial_message)
+        unique = {message.id: message for message in messages}
+        messages = sorted(unique.values(), key=lambda item: item.created_at)
+        self._intake_message_ids.update(message.id for message in messages)
+
+        blocks = []
+        for message in messages:
+            text = str(message.content or "").strip()
+            attachments = [attachment.url for attachment in getattr(message, "attachments", [])]
+            block = "\n".join(part for part in [text, *attachments] if part)
+            if block:
+                blocks.append(block)
+            try:
+                sent_emoji, _ = await self.bot.retrieve_emoji()
+                await self.bot.add_reaction(message, sent_emoji)
+            except Exception:
+                pass
+        combined = "\n\n".join(blocks) or "No text was provided."
+        synthetic = DummyMessage(copy.copy(initial_message))
+        synthetic.content = combined
+        synthetic.attachments = []
+        synthetic.id = initial_message.id
+        return synthetic
+
+    async def run_ai_intake_workflow(self, message, *, opening: bool = False) -> None:
+        """Run autoreply selection followed by one clarity/resolution assessment."""
+        self._opening_workflow_active = opening
+        try:
+            await self.consider_ai_autoreply(message)
+        finally:
+            self._opening_workflow_active = False
+
+        if self._opening_alias_subscribed:
+            await self.channel.send(
+                "Awaiting the subscribed agent. Automated resolution checks were skipped.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        if not self._opening_autoreply_sent and opening:
+            await self._send_ai_autoreply(
+                "AI assistance introduction",
+                secrets.choice(AI_HELLO_MESSAGES),
+                author_name="AI assistant",
+                footer_text=AI_HELLO_FOOTER,
+            )
+
+        api_key = self.bot.config.get("gemini_api_key", convert=False)
+        if not api_key or self.bot.session is None:
+            await self.channel.send("AI intake assessment unavailable; awaiting an agent.")
+            return
+        try:
+            log_entry = await self.bot.api.get_log(self.channel.id)
+            from core.ai_sorter import build_sorting_transcript
+
+            transcript = build_sorting_transcript(
+                (log_entry or {}).get("messages") or [],
+                bot_user_id=self.bot.user.id,
+            )
+            current_text = build_ticket_text(message)
+            if current_text:
+                transcript += "\n\n---\n\n[CURRENT RECIPIENT MESSAGE]\n" + current_text
+        except Exception:
+            logger.warning("Could not build the intake assessment transcript.", exc_info=True)
+            return
+        assessor = GeminiIntakeAssessment(
+            self.bot.session,
+            str(api_key),
+            model=str(self.bot.config.get("ai_sort_model") or "gemini-3.5-flash"),
+        )
+        result = await assessor.assess(
+            transcript,
+            autoreply_sent=self._opening_autoreply_sent,
+        )
+        if result is None:
+            await self.channel.send("AI intake assessment failed; awaiting an agent.")
+            await self._log_ai_check(
+                message,
+                build_ticket_text(message),
+                outcome=assessor.last_outcome,
+                detail=assessor.last_detail,
+                selected_name="intake assessment",
+                delivery_status="Assessment failed; ticket left for a human agent.",
+            )
+            return
+
+        remaining = "; ".join(result["remaining_inquiries"]) or "the stated inquiry"
+        await self._log_ai_check(
+            message,
+            build_ticket_text(message),
+            outcome="resolved" if result["resolved"] else "needs_follow_up",
+            detail=(
+                f"Clear: {result['clear']}. Resolved: {result['resolved']}. "
+                f"Remaining inquiries: {remaining}."
+            ),
+            selected_name="intake assessment",
+            response_text=result["clarification_question"],
+            delivery_status="Opening/follow-up intake decision recorded.",
+        )
+        if self._opening_autoreply_sent and result["resolved"]:
+            await self._send_ai_autoreply("Automatic all-inquiries closure", AI_ALL_CLOSING)
+            await self.close(closer=self.bot.user, after=24 * 60 * 60)
+            await self.channel.edit(
+                name="resolved",
+                reason="Automatic intake assessment marked all inquiries resolved",
+            )
+            return
+        if not result["clear"]:
+            question = result["clarification_question"] or (
+                "Could you please clarify exactly what you need assistance with?"
+            )
+            await self.channel.send(f"Clarification required: {question}")
+            await self._send_ai_autoreply("Intake clarification", question)
+            return
+
+        await self.channel.send(f"Remaining inquiries: {remaining}\nAwaiting an agent.")
+        await self._send_ai_autoreply(
+            "Human assistance requested",
+            "I have requested a human agent to assist with your remaining inquiry, "
+            f"{remaining}. Please patiently await their assistance.",
+        )
 
     async def _run_roblox_game_pass_autoreply(self, message, ticket_text: str) -> None:
         """Send the fixed game-pass guidance once per ticket without calling Gemini."""
@@ -1113,7 +1266,15 @@ class Thread:
 
         delivery_error = None
         try:
+            if self._opening_workflow_active and not self._opening_autoreply_sent:
+                await self._send_ai_autoreply(
+                    "Opening AI introduction",
+                    "Hello. I am an AI assistant and I will be helping you today.",
+                    author_name="AI assistant",
+                    footer_text=AI_HELLO_FOOTER,
+                )
             await self._send_ai_autoreply(selected_name, ROBLOX_GAME_PASS_AUTOREPLY)
+            self._opening_autoreply_sent = True
             delivery_status = (
                 "Automatic game-pass guidance delivered after the connected ticket-opened message."
                 if is_initial_message
@@ -1429,10 +1590,25 @@ class Thread:
                 return
 
             try:
+                if self._opening_workflow_active and not self._opening_autoreply_sent:
+                    await self._send_ai_autoreply(
+                        "Opening AI introduction",
+                        "Hello. I am an AI assistant and I will be helping you today.",
+                        author_name="AI assistant",
+                        footer_text=AI_HELLO_FOOTER,
+                    )
                 if alias_action is None:
                     await self._send_ai_autoreply(selected, response_text)
                 else:
                     await self._execute_ai_alias(selected, alias_action, message)
+                self._opening_autoreply_sent = True
+                self._opening_alias_subscribed = bool(
+                    alias_action
+                    and any(
+                        step.strip().casefold().startswith("sub ")
+                        for step in alias_action.get("steps", [])
+                    )
+                )
                 if alias_action is not None:
                     delivery_status = f'AI alias `{alias_action["alias"]}` executed in full.'
                     if is_initial_message:
@@ -1474,6 +1650,12 @@ class Thread:
             self._initial_message_id = getattr(initial_message, "id", None)
         self.bot.dispatch("thread_initiate", self, creator, category, initial_message)
         recipient = self.recipient
+        user_created = initial_message is not None and (creator is None or creator == recipient)
+        intake_message = initial_message
+        if user_created:
+            await recipient.create_dm()
+            intake_message = await self._collect_opening_intake(initial_message)
+            setattr(intake_message, "_combined_intake", True)
 
         # in case it creates a channel outside of category
         overwrites = {self.bot.modmail_guild.default_role: discord.PermissionOverwrite(read_messages=False)}
@@ -1547,9 +1729,9 @@ class Thread:
                 logger.error("Failed unexpectedly:", exc_info=True)
 
         async def send_recipient_genesis_message():
-            user_created = creator is None or creator == recipient
             if user_created:
-                await recipient.create_dm()
+                # The connected receipt was delivered before the intake delay and channel creation.
+                return
 
             async def run_initial_ai_review():
                 if not user_created:
@@ -1642,6 +1824,9 @@ class Thread:
             activate_auto_triggers(),
             send_persistent_notes(),
         )
+        if user_created and intake_message is not None:
+            await self.send(intake_message)
+            await self.run_ai_intake_workflow(intake_message, opening=True)
         self.bot.dispatch("thread_ready", self, creator, category, initial_message)
 
     def _format_info_embed(self, user, log_url, log_count, color):
@@ -2481,6 +2666,14 @@ class Thread:
             Explicit text to use instead of ``message.content``. Provided by refactored
             reply commands to avoid mutating the original message object.
         """
+        if (
+            not from_mod
+            and not note
+            and getattr(message, "id", None) in self._intake_message_ids
+            and not getattr(message, "_combined_intake", False)
+        ):
+            return None
+
         # Handle notes with Discord-like system message format - return early
         if note:
             destination = destination or self.channel
@@ -2532,7 +2725,10 @@ class Thread:
             await self.wait_until_ready()
 
         if not from_mod and not note:
-            self.bot.loop.create_task(self.bot.api.append_log(message, channel_id=self.channel.id))
+            if getattr(message, "_combined_intake", False):
+                await self.bot.api.append_log(message, channel_id=self.channel.id)
+            else:
+                self.bot.loop.create_task(self.bot.api.append_log(message, channel_id=self.channel.id))
 
         destination = destination or self.channel
 

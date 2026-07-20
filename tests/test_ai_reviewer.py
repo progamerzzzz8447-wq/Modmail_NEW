@@ -12,6 +12,7 @@ from core.ai_reviewer import (
     GeminiAnnoyReplyGenerator,
     GeminiAutoReplyReviewer,
     GeminiHelpfulReplyGenerator,
+    GeminiIntakeAssessment,
     GeminiTicketSummaryGenerator,
     build_autoreply_context,
     build_relayed_reply_transcript,
@@ -69,6 +70,31 @@ def generate_content_output(value):
 
 
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_intake_assessment_returns_clarity_resolution_and_remaining_inquiries(self):
+        session = FakeSession(
+            FakeResponse(
+                200,
+                generate_content_output(
+                    {
+                        "clear": True,
+                        "resolved": False,
+                        "remaining_inquiries": ["gamepass payment timing"],
+                        "clarification_question": "",
+                    }
+                ),
+            )
+        )
+        assessor = GeminiIntakeAssessment(session, "key", model="gemini-3.5-flash")
+
+        result = await assessor.assess("Recipient asked when payment arrives.", autoreply_sent=True)
+
+        self.assertTrue(result["clear"])
+        self.assertFalse(result["resolved"])
+        self.assertEqual(result["remaining_inquiries"], ["gamepass payment timing"])
+        self.assertEqual(session.calls, 1)
+        config = session.request[1]["json"]["generationConfig"]
+        self.assertEqual(config["thinkingConfig"], {"thinkingLevel": "minimal"})
+
     def test_decodes_utf8_text_attachment_for_aireply(self):
         self.assertEqual(
             decode_ai_text_attachment("context.TXT", b"Useful context \xe2\x9c\x93"),
