@@ -66,6 +66,7 @@ from core.utils import (
 )
 
 logger = getLogger(__name__)
+AI_INTAKE_MODEL = "gemini-3.1-flash-lite"
 
 
 class Thread:
@@ -1080,11 +1081,7 @@ class Thread:
             await self._run_ai_review(message, ticket_text)
 
     async def _collect_opening_intake(self, initial_message, delay: float = 10.0):
-        """Acknowledge immediately, then combine recipient DMs received during the intake window."""
-        receipt = await send_ticket_opened(self.recipient)
-        if self.bot.config.get("recipient_thread_close") and receipt is not None:
-            close_emoji = await self.bot.convert_emoji(self.bot.config["close_emoji"])
-            await self.bot.add_reaction(receipt, close_emoji)
+        """Combine recipient DMs received during the intake window."""
         await asyncio.sleep(delay)
 
         messages = []
@@ -1167,7 +1164,7 @@ class Thread:
         assessor = GeminiIntakeAssessment(
             self.bot.session,
             str(api_key),
-            model=str(self.bot.config.get("ai_sort_model") or "gemini-3.5-flash"),
+            model=AI_INTAKE_MODEL,
         )
         result = await assessor.assess(
             transcript,
@@ -1510,7 +1507,7 @@ class Thread:
         reviewer = GeminiAutoReplyReviewer(
             self.bot.session,
             str(api_key),
-            model=str(self.bot.config.get("gemini_model") or "gemini-3.1-flash-lite"),
+            model=AI_INTAKE_MODEL,
         )
         try:
             recent_messages = await self.bot.api.get_recent_log_messages(
@@ -1654,8 +1651,10 @@ class Thread:
         intake_message = initial_message
         if user_created:
             await recipient.create_dm()
-            intake_message = await self._collect_opening_intake(initial_message)
-            setattr(intake_message, "_combined_intake", True)
+            receipt = await send_ticket_opened(recipient)
+            if self.bot.config.get("recipient_thread_close") and receipt is not None:
+                close_emoji = await self.bot.convert_emoji(self.bot.config["close_emoji"])
+                await self.bot.add_reaction(receipt, close_emoji)
 
         # in case it creates a channel outside of category
         overwrites = {self.bot.modmail_guild.default_role: discord.PermissionOverwrite(read_messages=False)}
@@ -1684,6 +1683,14 @@ class Thread:
                 return
             else:
                 self._channel = channel
+
+        if user_created:
+            await channel.send(
+                "**PLEASE DO NOT REPLY YET.**",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            intake_message = await self._collect_opening_intake(initial_message)
+            setattr(intake_message, "_combined_intake", True)
 
         try:
             log_url, log_data = await asyncio.gather(
@@ -1730,7 +1737,7 @@ class Thread:
 
         async def send_recipient_genesis_message():
             if user_created:
-                # The connected receipt was delivered before the intake delay and channel creation.
+                # The connected receipt was delivered before the intake delay.
                 return
 
             async def run_initial_ai_review():
