@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 import os
@@ -439,6 +440,10 @@ class DummyMessage:
 
     def __getattr__(self, name: str):
         return getattr(self._message, name)
+
+    def __copy__(self):
+        """Copy this proxy without invoking delegated attributes during reconstruction."""
+        return type(self)(copy.copy(self._message))
 
     def __bool__(self):
         return bool(self._message)

@@ -1504,7 +1504,13 @@ class Thread:
     async def _invoke_ai_alias_step(self, step: str, source_message) -> None:
         """Invoke one configured non-reply alias step as a system-authored command."""
         view = StringView(self.bot.prefix + step)
-        synthetic = DummyMessage(copy.copy(source_message))
+        # Intake messages may already be wrapped in DummyMessage. Copying that proxy makes
+        # copy.copy probe attributes through __getattr__ while reconstructing it, recursively
+        # delegating before _message exists. Always clone the underlying Discord message.
+        original_message = source_message
+        while isinstance(original_message, DummyMessage):
+            original_message = original_message._message
+        synthetic = DummyMessage(copy.copy(original_message))
         synthetic.author = self.bot.modmail_guild.me or self.bot.user
         synthetic.channel = self.channel
         synthetic.guild = self.channel.guild
