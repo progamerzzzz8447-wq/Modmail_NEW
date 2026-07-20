@@ -1536,6 +1536,9 @@ class Thread:
         # replacing its checks: mutating the registered command could affect normal commands or a
         # second ticket executing at the same time.
         ctx.command = registered_command.copy()
+        # discord.py's Command.copy() deliberately produces an unbound command. Reattach the
+        # loaded cog so callbacks such as Modmail.subscribe receive both ``self`` and ``ctx``.
+        ctx.command.cog = registered_command.cog
         ctx.command.checks = [checks.has_permissions_predicate(PermissionLevel.INVALID)]
         await ctx.command.invoke(ctx)
 
