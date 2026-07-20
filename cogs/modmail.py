@@ -108,6 +108,16 @@ class Modmail(commands.Cog):
                 thread._pending_followup_message = message
             return
 
+        if getattr(thread, "_awaiting_initial_inquiry", False):
+            try:
+                await thread.begin_followup_autoreply_workflow(
+                    message,
+                    full_intake=True,
+                )
+            except Exception:
+                logger.warning("AI initial-inquiry follow-up failed.", exc_info=True)
+            return
+
         try:
             # Later messages may run configured autoreplies and a post-autoreply resolved check,
             # but never the ordinary automatic generative intake/clarification workflow.

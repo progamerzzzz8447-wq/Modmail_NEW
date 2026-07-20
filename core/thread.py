@@ -69,6 +69,19 @@ logger = getLogger(__name__)
 AI_INTAKE_MODEL = "gemini-3.1-flash-lite"
 
 
+def is_greeting_only_intake(value: str) -> bool:
+    """Return whether an opening contains only greetings or light pleasantries."""
+    words = re.findall(r"[a-z]+", str(value or "").casefold())
+    if not words:
+        return False
+    greeting_words = {
+        "hi", "hiya", "hello", "hey", "heya", "greetings", "howdy", "good",
+        "morning", "afternoon", "evening", "there", "how", "are", "you", "doing",
+        "today", "thanks", "thank", "please",
+    }
+    return len(words) <= 10 and all(word in greeting_words for word in words)
+
+
 class Thread:
     """Represents a discord Modmail thread"""
 
@@ -108,6 +121,7 @@ class Thread:
         self._opening_collection_open = False
         self._pending_followup_message = None
         self._intake_handed_to_agent = False
+        self._awaiting_initial_inquiry = False
         self._intake_workflow_lock = asyncio.Lock()
         self._followup_revision = 0
         self._followup_messages = []
@@ -1124,6 +1138,9 @@ class Thread:
                 author_name="AI assistant",
                 footer_text=AI_HELLO_FOOTER,
             )
+            if is_greeting_only_intake(build_ticket_text(message)):
+                self._awaiting_initial_inquiry = True
+                return
 
         api_key = self.bot.config.get("gemini_api_key", convert=False)
         if not api_key or self.bot.session is None:
@@ -1214,15 +1231,20 @@ class Thread:
                 "Could you please clarify exactly what you need assistance with?"
             )
             await self.channel.send(f"Clarification required: {question}")
-            await self._send_ai_autoreply("Intake clarification", question)
+            if autoreply_only:
+                self._intake_handed_to_agent = True
+                await self.channel.send("**You may now reply**")
+            else:
+                await self._send_ai_autoreply("Intake clarification", question)
             return
 
         await self.channel.send(f"Remaining inquiries: {remaining}\nAwaiting an agent.")
-        await self._send_ai_autoreply(
-            "Human assistance requested",
-            "I have requested a human agent to assist with your remaining inquiry, "
-            f"{remaining}. Please patiently await their assistance.",
-        )
+        if not autoreply_only:
+            await self._send_ai_autoreply(
+                "Human assistance requested",
+                "I have requested a human agent to assist with your remaining inquiry, "
+                f"{remaining}. Please patiently await their assistance.",
+            )
         self._intake_handed_to_agent = True
         await self.channel.send("**You may now reply**")
 
@@ -1263,10 +1285,19 @@ class Thread:
             self._pending_followup_message = None
             if pending is not None:
                 self.bot.loop.create_task(
-                    self.begin_followup_autoreply_workflow(pending)
+                    self.begin_followup_autoreply_workflow(
+                        pending,
+                        full_intake=self._awaiting_initial_inquiry,
+                    )
                 )
 
-    async def begin_followup_autoreply_workflow(self, message, delay: float = 2.0) -> None:
+    async def begin_followup_autoreply_workflow(
+        self,
+        message,
+        delay: float = 2.0,
+        *,
+        full_intake: bool = False,
+    ) -> None:
         """Debounce live follow-ups, then run configured autoreplies and their resolved check."""
         self._followup_messages.append(message)
         self._followup_revision += 1
@@ -1287,10 +1318,12 @@ class Thread:
             ]
             combined.content = "\n\n".join(recipient_parts) or str(message.content or "")
             combined.attachments = []
+            if full_intake:
+                self._awaiting_initial_inquiry = False
             await self.run_ai_intake_workflow(
                 combined,
                 opening=False,
-                autoreply_only=True,
+                autoreply_only=not full_intake,
             )
 
     async def _run_roblox_game_pass_autoreply(self, message, ticket_text: str) -> None:
@@ -1495,7 +1528,7 @@ class Thread:
         # steps with the same trusted permission bypass used by menu-invoked aliases, while still
         # retaining converters and surfacing command errors to the caller.
         old_checks = copy.copy(ctx.command.checks)
-        ctx.command.checks = [checks.has_permissions(PermissionLevel.INVALID)]
+        ctx.command.checks = [checks.has_permissions_predicate(PermissionLevel.INVALID)]
         try:
             await ctx.command.invoke(ctx)
         finally:
@@ -1682,11 +1715,15 @@ class Thread:
                 else:
                     await self._execute_ai_alias(selected, alias_action, message)
                 self._opening_autoreply_sent = True
+                actual_subscribers = self.bot.config["subscriptions"].get(str(self.id), [])
                 self._opening_alias_subscribed = bool(
-                    alias_action
-                    and any(
-                        step.strip().casefold().startswith("sub ")
-                        for step in alias_action.get("steps", [])
+                    actual_subscribers
+                    or (
+                        alias_action
+                        and any(
+                            step.strip().casefold().startswith("sub ")
+                            for step in alias_action.get("steps", [])
+                        )
                     )
                 )
                 if alias_action is not None:
