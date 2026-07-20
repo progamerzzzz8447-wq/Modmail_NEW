@@ -1520,38 +1520,50 @@ class Thread:
         ctx.thread = self
         discord.utils.find(view.skip_string, await self.bot.get_prefix())
         ctx.invoked_with = view.get_word().lower()
-        ctx.command = self.bot.all_commands.get(ctx.invoked_with)
+        registered_command = self.bot.all_commands.get(ctx.invoked_with)
         setattr(ctx, "_ai_autoreply", True)
-        if ctx.command is None:
+        if registered_command is None:
             raise commands.CommandNotFound(f'Alias step command "{ctx.invoked_with}" was not found.')
         # Autoreply aliases are administrator-configured system workflows. Run their non-reply
         # steps with the same trusted permission bypass used by menu-invoked aliases, while still
-        # retaining converters and surfacing command errors to the caller.
-        old_checks = copy.copy(ctx.command.checks)
+        # retaining converters and surfacing command errors to the caller. Copy the command before
+        # replacing its checks: mutating the registered command could affect normal commands or a
+        # second ticket executing at the same time.
+        ctx.command = registered_command.copy()
         ctx.command.checks = [checks.has_permissions_predicate(PermissionLevel.INVALID)]
-        try:
-            await ctx.command.invoke(ctx)
-        finally:
-            ctx.command.checks = old_checks
+        await ctx.command.invoke(ctx)
 
     async def _execute_ai_alias(self, display_name: str, alias_action, source_message) -> None:
         """Execute every alias step in order while preserving the AI footer on replies."""
+        action_errors = []
         for step in alias_action["steps"]:
-            parts = step.strip().split(maxsplit=1)
-            command = parts[0].casefold() if parts else ""
-            if command in SAFE_AI_REPLY_COMMANDS and len(parts) == 2 and parts[1].strip():
-                response_text = parts[1].strip()
-                if command in FORMATTED_AI_REPLY_COMMANDS:
-                    response_text = self.bot.formatter.format(
-                        response_text,
-                        channel=self.channel,
-                        recipient=self.recipient,
-                        author=self.bot.user,
-                    )
+            try:
+                parts = step.strip().split(maxsplit=1)
+                command = parts[0].casefold() if parts else ""
+                if command in SAFE_AI_REPLY_COMMANDS and len(parts) == 2 and parts[1].strip():
+                    response_text = parts[1].strip()
+                    if command in FORMATTED_AI_REPLY_COMMANDS:
+                        response_text = self.bot.formatter.format(
+                            response_text,
+                            channel=self.channel,
+                            recipient=self.recipient,
+                            author=self.bot.user,
+                        )
 
-                await self._send_ai_autoreply(display_name, response_text)
-                continue
-            await self._invoke_ai_alias_step(step, source_message)
+                    await self._send_ai_autoreply(display_name, response_text)
+                    continue
+                await self._invoke_ai_alias_step(step, source_message)
+            except Exception as exc:
+                # One broken action must not prevent the remaining administrator-configured
+                # actions from running. Report all failures after the complete chain is attempted.
+                logger.exception("AI alias step failed: %s", step)
+                action_errors.append(f'"{step}": {type(exc).__name__}: {exc}')
+
+        if action_errors:
+            raise commands.CommandError(
+                "One or more AI alias actions failed after all steps were attempted: "
+                + "; ".join(action_errors)
+            )
 
     async def _run_ai_review(self, message, ticket_text: str) -> None:
         """Run Gemini for one qualifying recipient message, failing open on every error."""

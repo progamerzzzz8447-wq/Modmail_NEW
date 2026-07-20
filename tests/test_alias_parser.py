@@ -44,6 +44,24 @@ class AliasParserTests(unittest.TestCase):
         self.assertIsNone(parse_reply_alias('"move applications" && "close"'))
         self.assertIsNone(parse_reply_alias('"freply"'))
 
+    def test_transfer_alias_retains_every_action_after_the_reply(self):
+        raw = (
+            '"fareply Ticket transferred" && "sub 1442572282475315321" && '
+            '"move Training & Recruitment" && "notify <@&1442572282475315321>" && '
+            '"rename unclaimed"'
+        )
+
+        self.assertEqual(
+            parse_alias(raw),
+            [
+                "fareply Ticket transferred",
+                "sub 1442572282475315321",
+                "move Training & Recruitment",
+                "notify <@&1442572282475315321>",
+                "rename unclaimed",
+            ],
+        )
+
     def test_normalize_alias_appends_invocation_text(self):
         self.assertEqual(normalize_alias('"freply Hello"', "world"), ["freply Hello world"])
 
