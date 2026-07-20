@@ -90,22 +90,35 @@ class Modmail(commands.Cog):
                 await self.bot.config.update()
             return
 
-        # The opening message is considered during thread setup. Every later recipient message is
-        # considered here so different autoreply types can each run once in the same ticket.
-        if getattr(thread, "_initial_message_id", None) != getattr(message, "id", None):
+        is_initial = getattr(thread, "_initial_message_id", None) == getattr(message, "id", None)
+        if is_initial:
             try:
-                await thread.run_ai_intake_workflow(message, opening=False)
+                await thread.begin_opening_intake_workflow(message)
             except Exception:
                 logger.warning(
-                    "AI ticket review failed for a recipient follow-up.",
+                    "AI opening intake workflow failed.",
                     exc_info=True,
                 )
+            return
+
+        # Messages sent during the opening observation window are already relayed live and included
+        # in its combined AI context. Do not launch overlapping Gemini workflows for them.
+        if getattr(thread, "_opening_intake_pending", False):
+            if not getattr(thread, "_opening_collection_open", False):
+                thread._pending_followup_message = message
+            return
+
+        try:
+            # After the one-time opening workflow, only configured autoreplies remain automatic.
+            await thread.consider_ai_autoreply(message)
+        except Exception:
+            logger.warning(
+                "AI ticket review failed for a recipient follow-up.",
+                exc_info=True,
+            )
 
         # The opening ticket message has its own normal notification flow. The
         # 12-hour reminder begins only when the recipient subsequently replies.
-        if getattr(thread, "_initial_message_id", None) == getattr(message, "id", None):
-            return
-
         try:
             delay = int(self.bot.config.get("recipient_reply_reminder_delay") or 43_200)
         except (TypeError, ValueError):
