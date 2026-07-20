@@ -109,6 +109,8 @@ class Thread:
         self._pending_followup_message = None
         self._intake_handed_to_agent = False
         self._intake_workflow_lock = asyncio.Lock()
+        self._followup_revision = 0
+        self._followup_messages = []
         self._ai_review_lock = asyncio.Lock()
         self._abuse_close_lock = asyncio.Lock()
         # --- SNOOZE STATE ---
@@ -1085,9 +1087,15 @@ class Thread:
                 return
             await self._run_ai_review(message, ticket_text)
 
-    async def run_ai_intake_workflow(self, message, *, opening: bool = False) -> None:
+    async def run_ai_intake_workflow(
+        self,
+        message,
+        *,
+        opening: bool = False,
+        autoreply_only: bool = False,
+    ) -> None:
         """Run autoreply selection followed by one clarity/resolution assessment."""
-        if self._intake_handed_to_agent:
+        if self._intake_handed_to_agent and not autoreply_only:
             return
         self._opening_workflow_active = opening
         try:
@@ -1102,6 +1110,11 @@ class Thread:
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             await self.channel.send("**You may now reply**")
+            return
+
+        # Later messages do not run automatic generative intake. They may only continue into the
+        # resolution check when a configured autoreply was actually delivered.
+        if autoreply_only and not self._opening_autoreply_sent:
             return
 
         if not self._opening_autoreply_sent and opening:
@@ -1249,7 +1262,36 @@ class Thread:
             pending = self._pending_followup_message
             self._pending_followup_message = None
             if pending is not None:
-                self.bot.loop.create_task(self.consider_ai_autoreply(pending))
+                self.bot.loop.create_task(
+                    self.begin_followup_autoreply_workflow(pending)
+                )
+
+    async def begin_followup_autoreply_workflow(self, message, delay: float = 2.0) -> None:
+        """Debounce live follow-ups, then run configured autoreplies and their resolved check."""
+        self._followup_messages.append(message)
+        self._followup_revision += 1
+        revision = self._followup_revision
+        await asyncio.sleep(delay)
+        if revision != self._followup_revision or self._opening_intake_pending:
+            return
+        async with self._intake_workflow_lock:
+            if revision != self._followup_revision:
+                return
+            combined = DummyMessage(copy.copy(message))
+            pending_messages = self._followup_messages
+            self._followup_messages = []
+            recipient_parts = [
+                build_ticket_text(item)
+                for item in pending_messages
+                if build_ticket_text(item)
+            ]
+            combined.content = "\n\n".join(recipient_parts) or str(message.content or "")
+            combined.attachments = []
+            await self.run_ai_intake_workflow(
+                combined,
+                opening=False,
+                autoreply_only=True,
+            )
 
     async def _run_roblox_game_pass_autoreply(self, message, ticket_text: str) -> None:
         """Send the fixed game-pass guidance once per ticket without calling Gemini."""
@@ -1449,7 +1491,15 @@ class Thread:
         setattr(ctx, "_ai_autoreply", True)
         if ctx.command is None:
             raise commands.CommandNotFound(f'Alias step command "{ctx.invoked_with}" was not found.')
-        await self.bot.invoke(ctx)
+        # Autoreply aliases are administrator-configured system workflows. Run their non-reply
+        # steps with the same trusted permission bypass used by menu-invoked aliases, while still
+        # retaining converters and surfacing command errors to the caller.
+        old_checks = copy.copy(ctx.command.checks)
+        ctx.command.checks = [checks.has_permissions(PermissionLevel.INVALID)]
+        try:
+            await ctx.command.invoke(ctx)
+        finally:
+            ctx.command.checks = old_checks
 
     async def _execute_ai_alias(self, display_name: str, alias_action, source_message) -> None:
         """Execute every alias step in order while preserving the AI footer on replies."""

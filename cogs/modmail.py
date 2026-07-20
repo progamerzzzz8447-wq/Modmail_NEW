@@ -109,8 +109,9 @@ class Modmail(commands.Cog):
             return
 
         try:
-            # After the one-time opening workflow, only configured autoreplies remain automatic.
-            await thread.consider_ai_autoreply(message)
+            # Later messages may run configured autoreplies and a post-autoreply resolved check,
+            # but never the ordinary automatic generative intake/clarification workflow.
+            await thread.begin_followup_autoreply_workflow(message)
         except Exception:
             logger.warning(
                 "AI ticket review failed for a recipient follow-up.",
