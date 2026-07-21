@@ -2405,7 +2405,7 @@ class Modmail(commands.Cog):
         )
         self.bot.dispatch("thread_reply", ctx.thread, True, ctx.message, False, False)
 
-    @commands.command()
+    @commands.command(aliases=["aibye"])
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
@@ -2669,7 +2669,7 @@ class Modmail(commands.Cog):
                 f"`{prefix}aireply [CONTEXT]` — Generate and send a helpful response; optional "
                 "staff context guides the draft.\n"
                 f"`{prefix}aiall` — Answer any unresolved question, then send the closure warning.\n"
-                f"`{prefix}aiclose` — Send the standard closure reply and close immediately.\n"
+                f"`{prefix}aiclose` / `{prefix}aibye` — Send the AI closure reply and close immediately.\n"
                 f"`{prefix}airude` — Send the abuse warning and close immediately.\n"
                 f"`{prefix}aisummarise` — Summarise the complete ticket for staff only.\n"
                 f"`{prefix}annoyautoreply` — Generate and send the sarcastic response.\n"
