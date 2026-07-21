@@ -2410,12 +2410,23 @@ class Modmail(commands.Cog):
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def aiclose(self, ctx):
-        """Send the standard formatted closure reply, then immediately close the ticket."""
-        # Match `freply MESSAGE && close`: relay the formatted staff reply successfully before
-        # closing the thread. The reply is recorded through the normal Modmail logging path.
-        ctx.message.content = AI_CLOSE_MESSAGE
+        """Send the standard closure reply from the AI identity, then close the ticket."""
         async with safe_typing(ctx):
-            await ctx.thread.reply(ctx.message, AI_CLOSE_MESSAGE)
+            await ctx.thread._send_ai_autoreply(
+                "Manual AI ticket closure",
+                AI_CLOSE_MESSAGE,
+            )
+
+        await ctx.thread._log_ai_check(
+            ctx.message,
+            "Staff invoked the standard AI ticket closure.",
+            outcome="premade",
+            detail="Sent the pre-written AI ticket closure; Gemini was not called.",
+            selected_name="aiclose",
+            response_text=AI_CLOSE_MESSAGE,
+            delivery_status="AI ticket-closure message delivered.",
+        )
+        self.bot.dispatch("thread_reply", ctx.thread, True, ctx.message, False, False)
         await ctx.thread.close(closer=ctx.author)
 
     @commands.command()
