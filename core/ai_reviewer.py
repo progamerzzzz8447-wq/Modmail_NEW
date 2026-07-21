@@ -1155,6 +1155,23 @@ class GeminiHelpfulReplyGenerator(GeminiThreadReplyGenerator):
     success_detail = "Generated a manual helpful support reply."
 
 
+class GeminiTicketChannelSummaryGenerator(GeminiThreadReplyGenerator):
+    """Produce a concise staff-only summary of an entire ticket channel."""
+
+    style_instructions = (
+        "Summarize the complete support ticket for staff. Capture the recipient's main inquiry, "
+        "important facts or evidence they provided, actions and answers already given by staff or "
+        "automation, the current status, and any unresolved question or required next step. Clearly "
+        "distinguish confirmed facts from claims made by the recipient. Do not invent information, "
+        "repeat greetings, include irrelevant chatter, or write a response addressed to the "
+        "recipient. Keep it concise and easy to scan. Use short paragraphs or compact bullet points "
+        "only when they improve clarity."
+    )
+    reply_description = "A concise factual staff summary of the complete ticket channel."
+    generation_label = "ticket channel summary"
+    success_detail = "Generated a staff-only summary of the complete ticket channel."
+
+
 class GeminiTicketSummaryGenerator(GeminiThreadReplyGenerator):
     """Answer only unresolved questions before the fixed all-inquiries closing."""
 

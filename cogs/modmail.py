@@ -27,7 +27,11 @@ from core.alias_parser import (
     parse_autoreply_rule_spec,
     parse_reply_alias,
 )
-from core.abuse_filter import contains_abusive_language, normalize_custom_abuse_term
+from core.abuse_filter import (
+    ABUSE_AUTO_CLOSE_MESSAGE,
+    contains_abusive_language,
+    normalize_custom_abuse_term,
+)
 from core.ai_reviewer import (
     AI_ALL_CLOSING,
     AI_HELLO_FOOTER,
@@ -38,6 +42,7 @@ from core.ai_reviewer import (
     AI_TEXT_ATTACHMENT_EXTENSIONS,
     GeminiAnnoyReplyGenerator,
     GeminiHelpfulReplyGenerator,
+    GeminiTicketChannelSummaryGenerator,
     GeminiTicketSummaryGenerator,
     NO_MATCH,
     build_relayed_reply_transcript,
@@ -63,6 +68,13 @@ from core.utils import *
 logger = getLogger(__name__)
 
 MANUAL_AI_ROLE_IDS = (1391515982417100951, 1516405254571298866)
+AI_CLOSE_MESSAGE = """**<:Disconnected2:1384981321364803614> | Ticket Closed**
+
+Thank you so much for reaching out to us today; we really appreciate your effort to get in touch. If you have any other questions or need further assistance in the future, please do not hesitate to contact us again. We're always here to help!
+
+*This ticket has now been closed. If you respond to this message it will create a new ticket.*
+
+-# <:Arrow:1407482040785571850> All tickets are logged incase of misconduct by yourself, or a staff member."""
 DEFAULT_SMART_AI_CONTEXT_PATH = Path(__file__).resolve().parent.parent / "core" / "smart_ai_context.md"
 AI_SORT_TIMES = (
     datetime_time(hour=6, tzinfo=ZoneInfo("Europe/London")),
@@ -2393,6 +2405,33 @@ class Modmail(commands.Cog):
         )
         self.bot.dispatch("thread_reply", ctx.thread, True, ctx.message, False, False)
 
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
+    @checks.thread_only()
+    async def aiclose(self, ctx):
+        """Send the standard formatted closure reply, then immediately close the ticket."""
+        # Match `freply MESSAGE && close`: relay the formatted staff reply successfully before
+        # closing the thread. The reply is recorded through the normal Modmail logging path.
+        ctx.message.content = AI_CLOSE_MESSAGE
+        async with safe_typing(ctx):
+            await ctx.thread.reply(ctx.message, AI_CLOSE_MESSAGE)
+        await ctx.thread.close(closer=ctx.author)
+
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
+    @checks.thread_only()
+    async def airude(self, ctx):
+        """Send the approved abuse warning, then silently close the ticket."""
+        # Reuse the deterministic autoswearing text so manual and automatic enforcement always
+        # communicate exactly the same rule. Close silently because the warning already tells the
+        # recipient that the ticket has been closed.
+        ctx.message.content = ABUSE_AUTO_CLOSE_MESSAGE
+        async with safe_typing(ctx):
+            await ctx.thread.reply(ctx.message, ABUSE_AUTO_CLOSE_MESSAGE)
+        await ctx.thread.close(closer=ctx.author, silent=True)
+
     async def _send_generated_ai_reply(
         self,
         ctx,
@@ -2619,6 +2658,9 @@ class Modmail(commands.Cog):
                 f"`{prefix}aireply [CONTEXT]` — Generate and send a helpful response; optional "
                 "staff context guides the draft.\n"
                 f"`{prefix}aiall` — Answer any unresolved question, then send the closure warning.\n"
+                f"`{prefix}aiclose` — Send the standard closure reply and close immediately.\n"
+                f"`{prefix}airude` — Send the abuse warning and close immediately.\n"
+                f"`{prefix}aisummarise` — Summarise the complete ticket for staff only.\n"
                 f"`{prefix}annoyautoreply` — Generate and send the sarcastic response.\n"
                 f"`{prefix}fakeautoreply MESSAGE` — Send your own text using the AI presentation.\n"
                 f"`{prefix}aisort` — Review every open ticket in one Gemini request.\n"
@@ -2718,6 +2760,22 @@ class Modmail(commands.Cog):
             relay_context_only=True,
             staff_context=staff_context,
             staff_attachment_context="\n\n".join(attachment_blocks),
+        )
+
+    @commands.command(aliases=["aisummarize"])
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
+    @checks.thread_only()
+    async def aisummarise(self, ctx):
+        """Summarise the complete ticket channel for staff without replying to the recipient."""
+        await self._send_generated_ai_reply(
+            ctx,
+            GeminiTicketChannelSummaryGenerator,
+            command_name="aisummarise",
+            log_name="Staff-only ticket summary",
+            tone_label="ticket summary",
+            staff_only=True,
+            include_closing=False,
         )
 
     @commands.command(aliases=["saireply"])

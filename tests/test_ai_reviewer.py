@@ -13,6 +13,7 @@ from core.ai_reviewer import (
     GeminiAutoReplyReviewer,
     GeminiHelpfulReplyGenerator,
     GeminiIntakeAssessment,
+    GeminiTicketChannelSummaryGenerator,
     GeminiTicketSummaryGenerator,
     build_autoreply_context,
     build_relayed_reply_transcript,
@@ -70,6 +71,17 @@ def generate_content_output(value):
 
 
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ticket_channel_summary_is_staff_focused_and_uses_complete_transcript(self):
+        generator = GeminiTicketChannelSummaryGenerator(FakeSession([]), "test-key")
+        transcript = "RECIPIENT MESSAGE: My application vanished.\nSTAFF-SENT MESSAGE: Checking."
+
+        prompt = generator.build_prompt(transcript)
+
+        self.assertIn("Summarize the complete support ticket for staff", prompt)
+        self.assertIn("current status", prompt)
+        self.assertIn(transcript, prompt)
+        self.assertIn("Do not invent", prompt)
+
     async def test_intake_assessment_returns_clarity_resolution_and_remaining_inquiries(self):
         session = FakeSession(
             FakeResponse(
