@@ -223,7 +223,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reviewer.last_outcome, "no_match")
         self.assertEqual(session.calls, 0)
 
-    def test_builds_ten_message_human_context_without_current_or_bot_messages(self):
+    def test_builds_complete_autoreply_context_including_staff_ai_and_actions(self):
         log_messages = [
             {
                 "message_id": str(index),
@@ -260,15 +260,15 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             log_messages,
             current_message_id=15,
             bot_user_id=999,
-            limit=10,
         )
 
-        self.assertEqual(len(context), 10)
-        self.assertEqual(context[0]["message"], "Conversation message 3")
-        self.assertEqual(context[-1]["message"], "Conversation message 12")
+        self.assertEqual(len(context), 14)
+        self.assertEqual(context[0]["message"], "Conversation message 1")
+        self.assertEqual(context[-1]["message"], "Private staff note")
         self.assertEqual(context[1]["speaker"], "human_staff")
-        self.assertNotIn("Bot or AI output", str(context))
-        self.assertNotIn("Private staff note", str(context))
+        self.assertEqual(context[-2]["speaker"], "ai_or_bot_reply")
+        self.assertEqual(context[-1]["speaker"], "staff_context_or_action")
+        self.assertIn("Bot or AI output", str(context))
         self.assertNotIn("Current recipient message", str(context))
 
     def test_manual_ai_transcript_uses_only_recipient_and_relayed_human_messages(self):

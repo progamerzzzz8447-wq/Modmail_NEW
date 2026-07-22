@@ -13,7 +13,9 @@ ABUSE_AUTO_CLOSE_MESSAGE = (
 _LEET_CHARACTERS = {
     "a": r"[a@4]",
     "e": r"[e3]",
-    "g": r"[gq69]",
+    # Do not treat q as an obfuscated g: a custom term such as "fag" would otherwise match the
+    # ordinary abbreviation "FAQ" and automatically close legitimate support tickets.
+    "g": r"[g69]",
     "i": r"[i1!|]",
     "o": r"[o0]",
     "s": r"[s$5]",

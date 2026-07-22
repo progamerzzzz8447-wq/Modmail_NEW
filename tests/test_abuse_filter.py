@@ -63,6 +63,15 @@ class AbuseFilterTests(unittest.TestCase):
             contains_abusive_language("custom wording", extra_terms=["customword"])
         )
 
+    def test_custom_term_does_not_treat_faq_as_obfuscated_abuse(self):
+        message = (
+            "Why is the Career FAQ document locked, and are we allowed to have multiple "
+            "careers at once?"
+        )
+
+        self.assertFalse(contains_abusive_language(message, extra_terms=["fag"]))
+        self.assertTrue(contains_abusive_language("f@g", extra_terms=["fag"]))
+
 
 if __name__ == "__main__":
     unittest.main()

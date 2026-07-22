@@ -1647,21 +1647,18 @@ class Thread:
             model=AI_INTAKE_MODEL,
         )
         try:
-            recent_messages = await self.bot.api.get_recent_log_messages(
-                self.channel.id,
-                limit=25,
-            )
+            log_entry = await self.bot.api.get_log(self.channel.id)
+            context_log_messages = (log_entry or {}).get("messages") or []
         except Exception:
-            recent_messages = []
+            context_log_messages = []
             logger.warning(
-                "Failed to load prior ticket context for Gemini autoreply classification.",
+                "Failed to load the complete ticket context for Gemini autoreply classification.",
                 exc_info=True,
             )
         context_messages = build_autoreply_context(
-            recent_messages,
+            context_log_messages,
             current_message_id=getattr(message, "id", None),
             bot_user_id=self.bot.user.id,
-            limit=10,
         )
         selected = await reviewer.classify(
             ticket_text,
