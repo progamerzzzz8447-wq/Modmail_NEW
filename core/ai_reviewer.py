@@ -21,6 +21,7 @@ AI_REPLY_FOOTER = (
     "This reply is AI generated. If you require further assistance, please reply to this message"
 )
 AI_REPLY_CLOSING = "Can I help with anything else?"
+AI_TEST_HUMAN_MARKER = "HUMAN_ASSISTANCE_REQUIRED:"
 AI_ALL_CLOSING = (
     "We have now answered all of your inquiries. Can we help with anything else? "
     "Otherwise, this ticket will be closed."
@@ -270,6 +271,52 @@ def has_application_trigger(text: str) -> bool:
     """Return whether text contains likely application or recruitment wording."""
     normalized = " ".join((text or "").casefold().split())
     return any(pattern.search(normalized) for pattern in APPLICATION_TRIGGER_PATTERNS)
+
+
+def has_application_start_intent(text: str) -> bool:
+    """Require an explicit request to begin/join through a staff application."""
+    normalized = " ".join(str(text or "").casefold().split())
+    role = r"(?:staff|team|crew|pilot|cabin\s+crew|ground\s+crew|ramp\s+agent|job|role)"
+    return bool(
+        re.search(
+            r"\b(?:how|where|can|could|may|want|wish|trying|ready)\b.{0,50}\bapply\b",
+            normalized,
+        )
+        or re.search(r"\bapply\b.{0,30}\b(?:here|now|today)\b", normalized)
+        or re.search(
+            r"\b(?:apply|applying|start|begin|open|fill|complete|submit|send)\b.{0,50}"
+            r"\b(?:application|form|job|role|position)\b",
+            normalized,
+        )
+        or re.search(
+            rf"\b(?:want|wish|looking|trying|how|can|could|may)\b.{{0,50}}"
+            rf"\b(?:apply|join|become|work)\b.{{0,50}}\b{role}\b",
+            normalized,
+        )
+        or re.search(
+            rf"\b(?:apply|join|become|work)\b.{{0,50}}\b{role}\b",
+            normalized,
+        )
+    )
+
+
+def is_application_form_autoreply(name: str, set_message: str) -> bool:
+    """Identify replies that start or collect a staff application rather than answer a query."""
+    normalized = " ".join(f"{name} {set_message}".casefold().split())
+    form_fields = sum(
+        marker in normalized
+        for marker in (
+            "discord username",
+            "discord id",
+            "roblox username",
+            "what device",
+            "working microphone",
+            "past experience",
+        )
+    )
+    return form_fields >= 3 or bool(
+        re.search(r"\b(?:application|apply)\s+form\b", normalized)
+    )
 
 
 def has_configured_trigger(text: str, trigger_terms: typing.Iterable[str]) -> bool:
@@ -599,6 +646,20 @@ class GeminiAutoReplyReviewer:
             for message in context_messages
         )
         current_is_ticket_routing = is_ticket_routing_request(ticket_text)
+        contextual_application_start = any(
+            message["speaker"] == "recipient"
+            and has_application_start_intent(message["message"])
+            for message in context_messages
+        )
+        if not (
+            has_application_start_intent(ticket_text)
+            or contextual_application_start
+        ):
+            choices = {
+                key: message
+                for key, message in choices.items()
+                if not is_application_form_autoreply(key, message)
+            }
         choices = {
             key: message
             for key, message in choices.items()
@@ -1164,6 +1225,26 @@ class GeminiHelpfulReplyGenerator(GeminiThreadReplyGenerator):
     reply_description = "The helpful and professional support reply."
     generation_label = "helpful AI reply"
     success_detail = "Generated a manual helpful support reply."
+
+
+class GeminiContinuousTestReplyGenerator(GeminiThreadReplyGenerator):
+    """Continue a test ticket autonomously until verified human assistance is necessary."""
+
+    style_instructions = (
+        "Act as the active support assistant for this ticket using the complete transcript. If a "
+        "supported, useful response or one concise clarification question can move the inquiry "
+        "forward, write that response. If the recipient needs an action, decision, investigation, "
+        "private-data lookup, policy answer, or information that is not supported by the transcript "
+        "and mandatory support policy, return exactly `HUMAN_ASSISTANCE_REQUIRED: reason`, replacing "
+        "reason with a short staff-facing explanation. Do not use that marker merely because the "
+        "recipient's request is unclear; ask a targeted clarification question first. Do not claim "
+        "that an action was completed unless the transcript proves it."
+    )
+    reply_description = (
+        "The next recipient-facing support reply, or the exact human-assistance marker and reason."
+    )
+    generation_label = "continuous AI test reply"
+    success_detail = "Generated the next continuous AI test decision."
 
 
 class GeminiTicketChannelSummaryGenerator(GeminiThreadReplyGenerator):

@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import re
 import secrets
 from datetime import datetime, time as datetime_time, timezone, timedelta
@@ -38,9 +39,11 @@ from core.ai_reviewer import (
     AI_HELLO_MESSAGES,
     AI_REPLY_CLOSING,
     AI_REPLY_FOOTER,
+    AI_TEST_HUMAN_MARKER,
     AI_TEXT_ATTACHMENT_MAX_BYTES,
     AI_TEXT_ATTACHMENT_EXTENSIONS,
     GeminiAnnoyReplyGenerator,
+    GeminiContinuousTestReplyGenerator,
     GeminiHelpfulReplyGenerator,
     GeminiTicketChannelSummaryGenerator,
     GeminiTicketSummaryGenerator,
@@ -59,7 +62,7 @@ from core.ai_sorter import (
     latest_conversation_has_closing,
     ticket_is_rename_eligible,
 )
-from core.models import DMDisabled, PermissionLevel, SimilarCategoryConverter, getLogger
+from core.models import DummyMessage, DMDisabled, PermissionLevel, SimilarCategoryConverter, getLogger
 from core.paginator import EmbedPaginatorSession
 from core.thread import Thread
 from core.time import UserFriendlyTime, human_timedelta
@@ -89,6 +92,8 @@ class Modmail(commands.Cog):
         self.bot = bot
         self._snoozed_cache = []
         self._ai_sort_lock = asyncio.Lock()
+        self._ai_test_threads = set()
+        self._ai_test_locks = {}
         self._auto_unsnooze_task = self.bot.loop.create_task(self.auto_unsnooze_task())
 
     @commands.Cog.listener()
@@ -110,6 +115,17 @@ class Modmail(commands.Cog):
                 logger.warning(
                     "AI opening intake workflow failed.",
                     exc_info=True,
+                )
+            return
+
+        if key in self._ai_test_threads:
+            try:
+                await self._run_ai_test_cycle(thread, message)
+            except Exception:
+                logger.error("Continuous AI test cycle failed.", exc_info=True)
+                self._ai_test_threads.discard(key)
+                await thread.channel.send(
+                    "AI test stopped because its reply cycle failed; human assistance is required."
                 )
             return
 
@@ -152,6 +168,104 @@ class Modmail(commands.Cog):
             "message_id": str(getattr(message, "id", "")),
         }
         await self.bot.config.update()
+
+    async def _run_ai_test_cycle(self, thread, message):
+        """Process one recipient turn while continuous AI test mode is active."""
+        key = str(thread.id)
+        lock = self._ai_test_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            if key not in self._ai_test_threads:
+                return
+
+            # Configured deterministic/Gemini-selected aliases take priority over a generated
+            # answer. They retain their normal duplicate guard and execute every configured step.
+            await thread.consider_ai_autoreply(message)
+            subscribers = self.bot.config["subscriptions"].get(key, [])
+            if subscribers or getattr(thread, "_opening_alias_subscribed", False):
+                self._ai_test_threads.discard(key)
+                await thread.channel.send(
+                    "AI test stopped: an autoreply alias subscribed a user or role."
+                )
+                await thread.channel.send("**You may now reply**")
+                return
+            if getattr(thread, "_opening_autoreply_sent", False):
+                # Do not stack a generated answer on top of an autoreply. Keep test mode enabled
+                # and assess the recipient's next turn instead.
+                return
+
+            api_key = self.bot.config.get("gemini_api_key", convert=False)
+            if not api_key or self.bot.session is None:
+                self._ai_test_threads.discard(key)
+                await thread.channel.send(
+                    "AI test stopped: Gemini is unavailable; human assistance is required."
+                )
+                await thread.channel.send("**You may now reply**")
+                return
+
+            log_entry = await self.bot.api.get_log(thread.channel.id)
+            transcript = build_sorting_transcript(
+                (log_entry or {}).get("messages") or [],
+                bot_user_id=self.bot.user.id,
+            )
+            generator = GeminiContinuousTestReplyGenerator(
+                self.bot.session,
+                str(api_key),
+                model="gemini-3.1-flash-lite",
+                timeout_seconds=30,
+            )
+            response = await generator.generate(transcript)
+            if response is None:
+                self._ai_test_threads.discard(key)
+                await thread._log_ai_check(
+                    message,
+                    transcript,
+                    outcome=generator.last_outcome,
+                    detail=generator.last_detail or "Continuous AI test generation failed.",
+                    selected_name="aitest",
+                    delivery_status="AI test stopped; awaiting human assistance.",
+                )
+                await thread.channel.send(
+                    "AI test stopped because Gemini could not produce a safe response."
+                )
+                await thread.channel.send("**You may now reply**")
+                return
+
+            if response.casefold().startswith(AI_TEST_HUMAN_MARKER.casefold()):
+                reason = response[len(AI_TEST_HUMAN_MARKER) :].strip() or "Human action is required."
+                self._ai_test_threads.discard(key)
+                handoff = (
+                    "I have requested a human agent to assist with your inquiry. "
+                    "Please patiently await their assistance."
+                )
+                await thread._send_ai_autoreply("AI test human handoff", handoff)
+                await thread._log_ai_check(
+                    message,
+                    transcript,
+                    outcome="human_assistance_required",
+                    detail=reason,
+                    selected_name="aitest",
+                    response_text=handoff,
+                    delivery_status="AI test stopped and requested human assistance.",
+                )
+                await thread.channel.send(f"AI test stopped — human assistance required: {reason}")
+                await thread.channel.send("**You may now reply**")
+                return
+
+            response = finalize_generated_ai_reply(
+                response,
+                include_closing=False,
+                maximum_length=4_000,
+            )
+            await thread._send_ai_autoreply("Continuous AI test reply", response)
+            await thread._log_ai_check(
+                message,
+                transcript,
+                outcome=generator.last_outcome,
+                detail=generator.last_detail or "Generated a continuous AI test reply.",
+                selected_name="aitest",
+                response_text=response,
+                delivery_status="Continuous AI test reply delivered; mode remains active.",
+            )
 
     @tasks.loop(minutes=1)
     async def unanswered_reply_reminders(self):
@@ -2433,6 +2547,67 @@ class Modmail(commands.Cog):
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
+    async def aitest(self, ctx, mode: str = None):
+        """Continuously answer recipient turns until the ticket requires a human or subscriber."""
+        normalized_mode = str(mode or "").strip().casefold()
+        if normalized_mode not in {"", "stop"}:
+            raise commands.BadArgument(
+                f"Use `{self.bot.prefix}aitest` or `{self.bot.prefix}aitest stop`."
+            )
+
+        key = str(ctx.thread.id)
+        if normalized_mode == "stop":
+            was_active = key in self._ai_test_threads
+            self._ai_test_threads.discard(key)
+            return await ctx.send(
+                "Continuous AI test mode stopped."
+                if was_active
+                else "Continuous AI test mode was not active in this ticket."
+            )
+
+        if key in self._ai_test_threads:
+            return await ctx.send(
+                f"Continuous AI test mode is already active. Use `{self.bot.prefix}aitest stop` "
+                "to disable it."
+            )
+
+        self._ai_test_threads.add(key)
+        await ctx.send(
+            "Continuous AI test mode enabled. It will stop when human assistance is required "
+            "or an autoreply alias subscribes a user or role."
+        )
+
+        # Immediately process the latest recipient turn so staff do not have to wait for another
+        # message after enabling the mode.
+        try:
+            log_entry = await self.bot.api.get_log(ctx.channel.id)
+            latest_recipient = next(
+                (
+                    item
+                    for item in reversed((log_entry or {}).get("messages") or [])
+                    if (item.get("author") or {}).get("mod") is False
+                    and str(item.get("content") or "").strip()
+                ),
+                None,
+            )
+            if latest_recipient is not None:
+                synthetic = DummyMessage(copy.copy(ctx.message))
+                synthetic.author = ctx.thread.recipient
+                synthetic.content = str(latest_recipient.get("content") or "").strip()
+                synthetic.attachments = []
+                synthetic.id = int(latest_recipient.get("message_id") or ctx.message.id)
+                await self._run_ai_test_cycle(ctx.thread, synthetic)
+        except Exception:
+            self._ai_test_threads.discard(key)
+            logger.error("Could not start continuous AI test mode.", exc_info=True)
+            raise commands.CommandError(
+                "Continuous AI test mode could not review the current ticket and was stopped."
+            )
+
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
+    @checks.thread_only()
     async def airude(self, ctx):
         """Send the approved abuse warning, then silently close the ticket."""
         # Reuse the deterministic autoswearing text so manual and automatic enforcement always
@@ -2672,6 +2847,7 @@ class Modmail(commands.Cog):
                 f"`{prefix}aiclose` / `{prefix}aibye` — Send the AI closure reply and close immediately.\n"
                 f"`{prefix}airude` — Send the abuse warning and close immediately.\n"
                 f"`{prefix}aisummarise` — Summarise the complete ticket for staff only.\n"
+                f"`{prefix}aitest [stop]` — Continuously handle the ticket until a human is required.\n"
                 f"`{prefix}annoyautoreply` — Generate and send the sarcastic response.\n"
                 f"`{prefix}fakeautoreply MESSAGE` — Send your own text using the AI presentation.\n"
                 f"`{prefix}aisort` — Review every open ticket in one Gemini request.\n"

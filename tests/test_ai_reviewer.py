@@ -11,6 +11,7 @@ from core.ai_reviewer import (
     TUI_SUPPORT_ASSISTANT_POLICY,
     GeminiAnnoyReplyGenerator,
     GeminiAutoReplyReviewer,
+    GeminiContinuousTestReplyGenerator,
     GeminiHelpfulReplyGenerator,
     GeminiIntakeAssessment,
     GeminiTicketChannelSummaryGenerator,
@@ -24,6 +25,7 @@ from core.ai_reviewer import (
     find_command_references,
     generate_ai_message_joint_id,
     has_application_trigger,
+    has_application_start_intent,
     has_configured_trigger,
     has_department_transfer_intent,
     has_roblox_game_pass_url,
@@ -71,6 +73,46 @@ def generate_content_output(value):
 
 
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_continuous_ai_test_asks_clarification_before_human_handoff(self):
+        generator = GeminiContinuousTestReplyGenerator(FakeSession([]), "test-key")
+        prompt = generator.build_prompt("[RECIPIENT MESSAGE]\nI need help with my ticket.")
+
+        self.assertIn("HUMAN_ASSISTANCE_REQUIRED: reason", prompt)
+        self.assertIn("ask a targeted clarification question first", prompt)
+        self.assertIn("Do not claim", prompt)
+
+    async def test_role_name_alone_cannot_send_an_application_form(self):
+        session = FakeSession(
+            FakeResponse(200, generate_content_output({"autoreply_key": "Ramp application"}))
+        )
+        reviewer = GeminiAutoReplyReviewer(session, "test-key")
+
+        selected = await reviewer.classify(
+            "Ground crew",
+            {
+                "Ramp application": (
+                    "Ramp Agent Fast Track Application\nDiscord Username:\nDiscord ID:\n"
+                    "Roblox Username:\nWhat device are you working on?\n"
+                    "Do you have a working microphone?"
+                )
+            },
+            context_messages=[
+                {"speaker": "recipient", "message": "When do I get the ticket?"},
+                {"speaker": "human_staff", "message": "Which service?"},
+                {"speaker": "recipient", "message": "Service"},
+                {
+                    "speaker": "ai_or_bot_reply",
+                    "message": "Please clarify which department or service this concerns.",
+                },
+            ],
+        )
+
+        self.assertIsNone(selected)
+        self.assertEqual(reviewer.last_outcome, "no_match")
+        self.assertEqual(session.calls, 0)
+        self.assertFalse(has_application_start_intent("Ground crew"))
+        self.assertTrue(has_application_start_intent("I want to apply for ground crew"))
+
     async def test_ticket_channel_summary_is_staff_focused_and_uses_complete_transcript(self):
         generator = GeminiTicketChannelSummaryGenerator(FakeSession([]), "test-key")
         transcript = "RECIPIENT MESSAGE: My application vanished.\nSTAFF-SENT MESSAGE: Checking."
