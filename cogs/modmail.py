@@ -116,6 +116,20 @@ class Modmail(commands.Cog):
                     "AI opening intake workflow failed.",
                     exc_info=True,
                 )
+            finally:
+                if key in self._ai_test_threads and (
+                    getattr(thread, "_opening_alias_subscribed", False)
+                    or getattr(thread, "_intake_handed_to_agent", False)
+                ):
+                    self._ai_test_threads.discard(key)
+            return
+
+        # Messages sent during the opening observation window are already relayed live and included
+        # in its combined AI context. This guard must run before continuous test mode so ?aitest
+        # cannot race the opening sequence and send an alias before the AI introduction.
+        if getattr(thread, "_opening_intake_pending", False):
+            if not getattr(thread, "_opening_collection_open", False):
+                thread._pending_followup_message = message
             return
 
         if key in self._ai_test_threads:
@@ -127,13 +141,6 @@ class Modmail(commands.Cog):
                 await thread.channel.send(
                     "AI test stopped because its reply cycle failed; human assistance is required."
                 )
-            return
-
-        # Messages sent during the opening observation window are already relayed live and included
-        # in its combined AI context. Do not launch overlapping Gemini workflows for them.
-        if getattr(thread, "_opening_intake_pending", False):
-            if not getattr(thread, "_opening_collection_open", False):
-                thread._pending_followup_message = message
             return
 
         if getattr(thread, "_awaiting_initial_inquiry", False):
@@ -175,6 +182,9 @@ class Modmail(commands.Cog):
         lock = self._ai_test_locks.setdefault(key, asyncio.Lock())
         async with lock:
             if key not in self._ai_test_threads:
+                return
+            if getattr(thread, "_opening_intake_pending", False):
+                # The normal opener owns hello -> alias -> resolution/aiall ordering.
                 return
 
             # Configured deterministic/Gemini-selected aliases take priority over a generated
@@ -2576,6 +2586,13 @@ class Modmail(commands.Cog):
             "Continuous AI test mode enabled. It will stop when human assistance is required "
             "or an autoreply alias subscribes a user or role."
         )
+
+        if getattr(ctx.thread, "_opening_intake_pending", False):
+            await ctx.send(
+                "The opening AI workflow is still running; continuous mode will wait until its "
+                "hello, autoreply, and resolution check have completed."
+            )
+            return
 
         # Immediately process the latest recipient turn so staff do not have to wait for another
         # message after enabling the mode.

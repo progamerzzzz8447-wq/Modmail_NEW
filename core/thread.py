@@ -114,6 +114,7 @@ class Thread:
         self._dm_menu_channel_id = None
         self._initial_message_id = None
         self._opening_workflow_active = False
+        self._opening_introduction_sent = False
         self._opening_autoreply_sent = False
         self._opening_alias_subscribed = False
         self._opening_intake_pending = False
@@ -1084,8 +1085,13 @@ class Thread:
             return
 
         async with self._ai_review_lock:
-            self._opening_autoreply_sent = False
-            self._opening_alias_subscribed = False
+            # Preserve opening delivery state across every review hook until the opening workflow
+            # finishes. A second check must not forget an alias already sent and then emit a late
+            # welcome or incorrect human handoff.
+            if not self._opening_intake_pending:
+                self._opening_introduction_sent = False
+                self._opening_autoreply_sent = False
+                self._opening_alias_subscribed = False
             if not self.bot.config.get("gemini_ai_enabled"):
                 return
 
@@ -1138,6 +1144,7 @@ class Thread:
                 author_name="AI assistant",
                 footer_text=AI_HELLO_FOOTER,
             )
+            self._opening_introduction_sent = True
             if is_greeting_only_intake(build_ticket_text(message)):
                 self._awaiting_initial_inquiry = True
                 return
@@ -1721,13 +1728,16 @@ class Thread:
                 return
 
             try:
-                if self._opening_workflow_active and not self._opening_autoreply_sent:
+                if (
+                    self._opening_workflow_active or self._opening_intake_pending
+                ) and not self._opening_introduction_sent:
                     await self._send_ai_autoreply(
                         "Opening AI introduction",
                         "Hello. I am an AI assistant and I will be helping you today.",
                         author_name="AI assistant",
                         footer_text=AI_HELLO_FOOTER,
                     )
+                    self._opening_introduction_sent = True
                 if alias_action is None:
                     await self._send_ai_autoreply(selected, response_text)
                 else:
