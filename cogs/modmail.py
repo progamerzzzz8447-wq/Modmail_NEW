@@ -71,6 +71,7 @@ from core.utils import *
 logger = getLogger(__name__)
 
 MANUAL_AI_ROLE_IDS = (1391515982417100951, 1516405254571298866)
+RESOLVED_CATEGORY_ID = 1369044841366814871
 AI_CLOSE_MESSAGE = """**<:Disconnected2:1384981321364803614> | Ticket Closed**
 
 Thank you so much for reaching out to us today; we really appreciate your effort to get in touch. If you have any other questions or need further assistance in the future, please do not hesitate to contact us again. We're always here to help!
@@ -2834,12 +2835,22 @@ class Modmail(commands.Cog):
         return True
 
     async def _resolve_aiall_thread(self, ctx) -> None:
-        """Mark a successfully answered ticket resolved and schedule its closure."""
-        await ctx.thread.close(closer=ctx.author, after=24 * 60 * 60)
+        """Move and rename a successfully answered ticket, then schedule its closure."""
+        resolved_category = ctx.guild.get_channel(RESOLVED_CATEGORY_ID)
+        if not isinstance(resolved_category, discord.CategoryChannel):
+            raise commands.ChannelNotFound(str(RESOLVED_CATEGORY_ID))
+
+        await ctx.channel.move(
+            category=resolved_category,
+            end=True,
+            sync_permissions=True,
+            reason=f"aiall marked resolved by {ctx.author}",
+        )
         await ctx.channel.edit(
             name="resolved",
             reason=f"aiall marked resolved by {ctx.author}",
         )
+        await ctx.thread.close(closer=ctx.author, after=24 * 60 * 60)
 
     @commands.command()
     @checks.has_permissions(PermissionLevel.SUPPORTER)
