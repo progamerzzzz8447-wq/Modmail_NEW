@@ -60,6 +60,8 @@ from core.utils import (
 
 logger = getLogger(__name__)
 
+COMMAND_DISABLED_GUILD_IDS = frozenset({1308444031188992090})
+
 temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp")
 if not os.path.exists(temp_dir):
     os.mkdir(temp_dir)
@@ -1517,6 +1519,10 @@ class ModmailBot(commands.Bot):
             return await self._queue_dm_message(message)
 
         ctxs = await self.get_contexts(message)
+        commands_disabled = (
+            message.guild is not None
+            and message.guild.id in COMMAND_DISABLED_GUILD_IDS
+        )
         deferred_message = next(
             (
                 ctx.message
@@ -1527,6 +1533,13 @@ class ModmailBot(commands.Bot):
         )
         for ctx in ctxs:
             if ctx.command:
+                if commands_disabled:
+                    logger.info(
+                        "Ignored command %s in command-disabled guild %s.",
+                        ctx.command.qualified_name,
+                        message.guild.id,
+                    )
+                    continue
                 if not any(1 for check in ctx.command.checks if hasattr(check, "permission_level")):
                     logger.debug(
                         "Command %s has no permissions check, adding invalid level.",
