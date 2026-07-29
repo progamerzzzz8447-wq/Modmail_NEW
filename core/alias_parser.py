@@ -234,7 +234,7 @@ def _extract_autoreply_alternatives(value: str) -> typing.Tuple[str, typing.List
     return alias_value, alternatives
 
 
-AUTOREPLY_DISPLAY_NAME_LIMIT = 200
+AUTOREPLY_DISPLAY_NAME_LIMIT = 500
 AUTOREPLY_ADDITIONAL_INFO_LIMIT = 2_000
 AUTOREPLY_TOTAL_CHOICE_LIMIT = 50
 

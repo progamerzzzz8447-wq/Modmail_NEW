@@ -116,7 +116,7 @@ class AliasParserTests(unittest.TestCase):
             },
         )
 
-    def test_accepts_descriptive_alternative_names_up_to_200_characters(self):
+    def test_accepts_descriptive_alternative_names_up_to_500_characters(self):
         long_name = (
             "Can my application be reviewed early? "
             "(Must mention read now / skip waiting / instead of waiting etc)"
@@ -130,11 +130,11 @@ class AliasParserTests(unittest.TestCase):
         self.assertEqual(len(long_name), 101)
         self.assertEqual(parsed["alternatives"][0]["name"], long_name)
 
-        with self.assertRaisesRegex(ValueError, "between 1 and 200 characters"):
+        with self.assertRaisesRegex(ValueError, "between 1 and 500 characters"):
             parse_autoreply_rule_spec(
                 "NAME: Application help",
                 '["MUST MENTION TO CHECK": apply] apply '
-                f'["ALTERNATIVES": {{"{"x" * 201}": too-long}}]',
+                f'["ALTERNATIVES": {{"{"x" * 501}": too-long}}]',
             )
 
     def test_parses_and_round_trips_additional_selection_info(self):
