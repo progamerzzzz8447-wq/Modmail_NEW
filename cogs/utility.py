@@ -1,10 +1,13 @@
 from core.utils import trigger_typing, truncate
 import asyncio
 import inspect
+import json
 import os
 import random
 import re
+import tempfile
 import traceback
+import zipfile
 from contextlib import redirect_stdout
 from difflib import get_close_matches
 from io import BytesIO, StringIO
@@ -2280,3 +2283,49 @@ class Utility(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Utility(bot))
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.OWNER)
+    @trigger_typing
+    async def exporteverylogever(self, ctx):
+        """Exports every ticket log for this server as chunked ZIP archives."""
+        query = {"guild_id": str(self.bot.guild_id)}
+        cursor = self.bot.api.logs.find(query).sort("created_at", 1)
+        upload_limit = getattr(ctx.guild, "filesize_limit", 8 * 1024 * 1024)
+        # Leave room for ZIP metadata and Discord's attachment-size accounting.
+        raw_chunk_limit = max(512_000, int(upload_limit * 0.70))
+        archive_paths = []
+        ticket_count = 0
+
+        with tempfile.TemporaryDirectory(prefix="modmail-log-export-") as temp_dir:
+            archive = None
+            archive_raw_size = 0
+            archive_index = 0
+
+            async for ticket in cursor:
+                payload = json.dumps(ticket, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+                if archive is None or (archive_raw_size and archive_raw_size + len(payload) > raw_chunk_limit):
+                    if archive is not None:
+                        archive.close()
+                    archive_index += 1
+                    path = os.path.join(temp_dir, f"ticket-logs-{archive_index:03d}.zip")
+                    archive_paths.append(path)
+                    archive = zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED)
+                    archive_raw_size = 0
+
+                identifier = ticket.get("key") or ticket.get("channel_id") or ticket.get("_id")
+                safe_identifier = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(identifier or ticket_count + 1))
+                archive.writestr(f"ticket-{ticket_count + 1:06d}-{safe_identifier}.txt", payload)
+                archive_raw_size += len(payload)
+                ticket_count += 1
+
+            if archive is not None:
+                archive.close()
+
+            if not ticket_count:
+                return await ctx.send("No ticket logs were found for this server.")
+
+            await ctx.send(
+                f"Exported {ticket_count:,} ticket log(s) into {len(archive_paths):,} file(s)."
+            )
+            for path in archive_paths:
+                await ctx.send(file=discord.File(path, filename=os.path.basename(path)))

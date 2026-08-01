@@ -1116,6 +1116,7 @@ class Thread:
         *,
         opening: bool = False,
         autoreply_only: bool = False,
+        followup_revision: typing.Optional[int] = None,
     ) -> None:
         """Run autoreply selection followed by one clarity/resolution assessment."""
         if self._intake_handed_to_agent and not autoreply_only:
@@ -1190,6 +1191,10 @@ class Thread:
             autoreply_sent=self._opening_autoreply_sent,
             questions_asked=intake_questions_asked,
         )
+        # A newer recipient message arrived while Gemini was assessing this batch. Its debounced
+        # workflow owns the next response, so this stale result must never send a clarification.
+        if followup_revision is not None and followup_revision != self._followup_revision:
+            return
         if result is None:
             self._intake_collecting = False
             self._intake_handed_to_agent = True
@@ -1320,7 +1325,7 @@ class Thread:
     async def begin_followup_autoreply_workflow(
         self,
         message,
-        delay: float = 2.0,
+        delay: float = 3.0,
         *,
         full_intake: bool = False,
     ) -> None:
@@ -1350,6 +1355,7 @@ class Thread:
                 combined,
                 opening=False,
                 autoreply_only=not full_intake,
+                followup_revision=revision,
             )
 
     async def _run_roblox_game_pass_autoreply(self, message, ticket_text: str) -> None:
