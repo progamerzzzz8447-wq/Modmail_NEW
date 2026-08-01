@@ -1188,6 +1188,7 @@ class Thread:
         result = await assessor.assess(
             transcript,
             autoreply_sent=self._opening_autoreply_sent,
+            questions_asked=intake_questions_asked,
         )
         if result is None:
             self._intake_collecting = False
@@ -1223,6 +1224,10 @@ class Thread:
                 return
 
         remaining = "; ".join(result["remaining_inquiries"]) or "the stated inquiry"
+        handoff_context = (
+            f"**Ticket summary:** {result['ticket_summary'] or 'No summary available.'}\n"
+            f"**Question/request:** {result['primary_question'] or remaining}"
+        )
         await self._log_ai_check(
             message,
             build_ticket_text(message),
@@ -1250,7 +1255,7 @@ class Thread:
                 self._intake_collecting = False
                 self._intake_handed_to_agent = True
                 await self._send_ai_autoreply("Automatic intake handoff", AI_INTAKE_HANDOFF)
-                await self.channel.send("**You may now reply**")
+                await self.channel.send(f"**You may now reply**\n{handoff_context}")
                 return
             question = result["clarification_question"] or (
                 "Could you please clarify exactly what you need assistance with?"
@@ -1267,7 +1272,7 @@ class Thread:
         self._intake_collecting = False
         await self._send_ai_autoreply("Automatic intake handoff", AI_INTAKE_HANDOFF)
         self._intake_handed_to_agent = True
-        await self.channel.send("**You may now reply**")
+        await self.channel.send(f"**You may now reply**\n{handoff_context}")
 
     async def begin_opening_intake_workflow(self, initial_message) -> None:
         """Observe ten seconds of normally relayed messages before assessing the opening intake."""

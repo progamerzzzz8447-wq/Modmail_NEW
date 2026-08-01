@@ -155,20 +155,35 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
                         "resolved": False,
                         "remaining_inquiries": ["gamepass payment timing"],
                         "clarification_question": "",
+                        "ticket_summary": "Recipient is asking about a gamepass payment.",
+                        "primary_question": "When will the gamepass payment arrive?",
                     }
                 ),
             )
         )
         assessor = GeminiIntakeAssessment(session, "key", model="gemini-3.5-flash")
 
-        result = await assessor.assess("Recipient asked when payment arrives.", autoreply_sent=True)
+        result = await assessor.assess(
+            "Recipient asked when payment arrives.",
+            autoreply_sent=True,
+            questions_asked=3,
+        )
 
         self.assertTrue(result["clear"])
         self.assertFalse(result["resolved"])
         self.assertEqual(result["remaining_inquiries"], ["gamepass payment timing"])
+        self.assertEqual(result["ticket_summary"], "Recipient is asking about a gamepass payment.")
+        self.assertEqual(result["primary_question"], "When will the gamepass payment arrive?")
         self.assertEqual(session.calls, 1)
         config = session.request[1]["json"]["generationConfig"]
         self.assertEqual(config["thinkingConfig"], {"thinkingLevel": "minimal"})
+        prompt = session.request[1]["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("Ask only for information that is indispensable", prompt)
+        self.assertIn("location plus approximate time", prompt)
+        self.assertIn("Never repeat a question", prompt)
+        self.assertIn("CLARIFICATION QUESTIONS ALREADY ASKED: 3", prompt)
+        self.assertIn("Hand the ticket to staff as early as reasonably possible", prompt)
+        self.assertIn("`ticket_summary`", prompt)
 
     def test_decodes_utf8_text_attachment_for_aireply(self):
         self.assertEqual(
