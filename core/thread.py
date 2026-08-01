@@ -4,7 +4,6 @@ import base64
 import functools
 import io
 import re
-import secrets
 import time
 import traceback
 import typing
@@ -26,12 +25,15 @@ from core.abuse_filter import ABUSE_AUTO_CLOSE_MESSAGE, contains_abusive_languag
 from core.ai_reviewer import (
     AI_ALL_CLOSING,
     AI_HELLO_FOOTER,
-    AI_HELLO_MESSAGES,
     AI_REPLY_FOOTER,
+    AI_INTAKE_GREETING,
+    AI_INTAKE_HANDOFF,
+    AI_INTAKE_MAX_QUESTIONS,
     ROBLOX_GAME_PASS_AUTOREPLY,
     GeminiAutoReplyReviewer,
     GeminiIntakeAssessment,
     build_autoreply_context,
+    count_logged_intake_questions,
     build_ticket_text,
     describe_ai_error,
     generate_ai_message_joint_id,
@@ -122,6 +124,7 @@ class Thread:
         self._opening_collection_open = False
         self._pending_followup_message = None
         self._intake_handed_to_agent = False
+        self._intake_collecting = False
         self._awaiting_initial_inquiry = False
         self._intake_workflow_lock = asyncio.Lock()
         self._followup_revision = 0
@@ -1117,6 +1120,11 @@ class Thread:
         """Run autoreply selection followed by one clarity/resolution assessment."""
         if self._intake_handed_to_agent and not autoreply_only:
             return
+        if self.bot.config["subscriptions"].get(str(self.id), []):
+            self._opening_alias_subscribed = True
+            self._intake_collecting = False
+            self._intake_handed_to_agent = True
+            return
         self._opening_workflow_active = opening
         try:
             await self.consider_ai_autoreply(message)
@@ -1124,6 +1132,7 @@ class Thread:
             self._opening_workflow_active = False
 
         if self._opening_alias_subscribed:
+            self._intake_collecting = False
             self._intake_handed_to_agent = True
             await self.channel.send(
                 "Awaiting the subscribed agent. Automated resolution checks were skipped.",
@@ -1137,20 +1146,14 @@ class Thread:
         if autoreply_only and not self._opening_autoreply_sent:
             return
 
-        if not self._opening_autoreply_sent and opening:
-            await self._send_ai_autoreply(
-                "AI assistance introduction",
-                secrets.choice(AI_HELLO_MESSAGES),
-                author_name="AI assistant",
-                footer_text=AI_HELLO_FOOTER,
-            )
-            self._opening_introduction_sent = True
-            if is_greeting_only_intake(build_ticket_text(message)):
-                self._awaiting_initial_inquiry = True
-                return
+        if opening and is_greeting_only_intake(build_ticket_text(message)):
+            self._awaiting_initial_inquiry = True
+            self._intake_collecting = True
+            return
 
         api_key = self.bot.config.get("gemini_api_key", convert=False)
         if not api_key or self.bot.session is None:
+            self._intake_collecting = False
             self._intake_handed_to_agent = True
             await self.channel.send("AI intake assessment unavailable; awaiting an agent.")
             await self.channel.send("**You may now reply**")
@@ -1166,8 +1169,13 @@ class Thread:
             current_text = build_ticket_text(message)
             if current_text:
                 transcript += "\n\n---\n\n[CURRENT RECIPIENT MESSAGE]\n" + current_text
+            intake_questions_asked = count_logged_intake_questions(
+                (log_entry or {}).get("messages") or [],
+                bot_user_id=self.bot.user.id,
+            )
         except Exception:
             logger.warning("Could not build the intake assessment transcript.", exc_info=True)
+            self._intake_collecting = False
             self._intake_handed_to_agent = True
             await self.channel.send("Could not assess the intake; awaiting an agent.")
             await self.channel.send("**You may now reply**")
@@ -1182,6 +1190,7 @@ class Thread:
             autoreply_sent=self._opening_autoreply_sent,
         )
         if result is None:
+            self._intake_collecting = False
             self._intake_handed_to_agent = True
             await self.channel.send("AI intake assessment failed; awaiting an agent.")
             await self._log_ai_check(
@@ -1204,6 +1213,7 @@ class Thread:
             self._pending_followup_message = None
             await self.consider_ai_autoreply(pending)
             if self._opening_alias_subscribed:
+                self._intake_collecting = False
                 self._intake_handed_to_agent = True
                 await self.channel.send(
                     "Awaiting the subscribed agent. Automated resolution checks were skipped.",
@@ -1226,6 +1236,8 @@ class Thread:
             delivery_status="Opening/follow-up intake decision recorded.",
         )
         if self._opening_autoreply_sent and result["resolved"]:
+            self._intake_collecting = False
+            self._intake_handed_to_agent = True
             await self._send_ai_autoreply("Automatic all-inquiries closure", AI_ALL_CLOSING)
             await self.close(closer=self.bot.user, after=24 * 60 * 60)
             await self.channel.edit(
@@ -1234,24 +1246,26 @@ class Thread:
             )
             return
         if not result["clear"]:
+            if intake_questions_asked >= AI_INTAKE_MAX_QUESTIONS:
+                self._intake_collecting = False
+                self._intake_handed_to_agent = True
+                await self._send_ai_autoreply("Automatic intake handoff", AI_INTAKE_HANDOFF)
+                await self.channel.send("**You may now reply**")
+                return
             question = result["clarification_question"] or (
                 "Could you please clarify exactly what you need assistance with?"
             )
-            await self.channel.send(f"Clarification required: {question}")
-            if autoreply_only:
-                self._intake_handed_to_agent = True
-                await self.channel.send("**You may now reply**")
-            else:
-                await self._send_ai_autoreply("Intake clarification", question)
+            self._intake_collecting = True
+            await self.channel.send(
+                f"Intake clarification {intake_questions_asked + 1}/{AI_INTAKE_MAX_QUESTIONS}: "
+                f"{question}"
+            )
+            await self._send_ai_autoreply("Intake clarification", question)
             return
 
         await self.channel.send(f"Remaining inquiries: {remaining}\nAwaiting an agent.")
-        if not autoreply_only:
-            await self._send_ai_autoreply(
-                "Human assistance requested",
-                "I have requested a human agent to assist with your remaining inquiry, "
-                f"{remaining}. Please patiently await their assistance.",
-            )
+        self._intake_collecting = False
+        await self._send_ai_autoreply("Automatic intake handoff", AI_INTAKE_HANDOFF)
         self._intake_handed_to_agent = True
         await self.channel.send("**You may now reply**")
 
@@ -1964,6 +1978,22 @@ class Thread:
 
         # The recipient information/genesis embed must always be the first channel message.
         await send_genesis_message()
+        if user_created and self.bot.config.get("gemini_ai_enabled"):
+            try:
+                await self._send_ai_autoreply(
+                    "AI assistance introduction",
+                    AI_INTAKE_GREETING,
+                    author_name="AI assistant",
+                    footer_text=AI_HELLO_FOOTER,
+                )
+                self._opening_introduction_sent = True
+                self._intake_collecting = True
+            except Exception:
+                # The connected receipt and ordinary Modmail flow remain authoritative.
+                logger.warning(
+                    "Could not send the AI intake introduction; continuing normal handling.",
+                    exc_info=True,
+                )
         await asyncio.gather(
             send_recipient_genesis_message(),
             activate_auto_triggers(),

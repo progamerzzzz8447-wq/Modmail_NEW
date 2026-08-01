@@ -144,7 +144,13 @@ class Modmail(commands.Cog):
                 )
             return
 
-        if getattr(thread, "_awaiting_initial_inquiry", False):
+        subscribers = self.bot.config["subscriptions"].get(key, [])
+        if subscribers or getattr(thread, "_opening_alias_subscribed", False):
+            thread._intake_collecting = False
+            thread._intake_handed_to_agent = True
+        elif getattr(thread, "_awaiting_initial_inquiry", False) or getattr(
+            thread, "_intake_collecting", False
+        ):
             try:
                 await thread.begin_followup_autoreply_workflow(
                     message,
@@ -152,17 +158,16 @@ class Modmail(commands.Cog):
                 )
             except Exception:
                 logger.warning("AI initial-inquiry follow-up failed.", exc_info=True)
-            return
-
-        try:
-            # Later messages may run configured autoreplies and a post-autoreply resolved check,
-            # but never the ordinary automatic generative intake/clarification workflow.
-            await thread.begin_followup_autoreply_workflow(message)
-        except Exception:
-            logger.warning(
-                "AI ticket review failed for a recipient follow-up.",
-                exc_info=True,
-            )
+        elif not getattr(thread, "_intake_handed_to_agent", False):
+            try:
+                # Later messages may run configured autoreplies and a post-autoreply resolved check,
+                # but never the ordinary automatic generative intake/clarification workflow.
+                await thread.begin_followup_autoreply_workflow(message)
+            except Exception:
+                logger.warning(
+                    "AI ticket review failed for a recipient follow-up.",
+                    exc_info=True,
+                )
 
         # The opening ticket message has its own normal notification flow. The
         # 12-hour reminder begins only when the recipient subsequently replies.

@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from core.ai_reviewer import (
     AI_ALL_CLOSING,
     AI_HELLO_MESSAGES,
+    AI_INTAKE_GREETING,
+    AI_INTAKE_MAX_QUESTIONS,
     AI_HELLO_FOOTER,
     AI_REPLY_FOOTER,
     ROBLOX_GAME_PASS_AUTOREPLY,
@@ -18,6 +20,7 @@ from core.ai_reviewer import (
     GeminiTicketSummaryGenerator,
     build_autoreply_context,
     build_relayed_reply_transcript,
+    count_logged_intake_questions,
     build_ticket_text,
     describe_ai_error,
     decode_ai_text_attachment,
@@ -73,6 +76,24 @@ def generate_content_output(value):
 
 
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
+    def test_intake_greeting_and_durable_five_question_cap(self):
+        self.assertIn("Please tell me why you're opening a ticket", AI_INTAKE_GREETING)
+        self.assertEqual(AI_INTAKE_MAX_QUESTIONS, 5)
+        messages = [
+            {
+                "author": {"id": "999", "mod": True},
+                "content": f"[AI autoreply: Intake clarification]\nQuestion {index}",
+            }
+            for index in range(5)
+        ]
+        messages.extend(
+            [
+                {"author": {"id": "100", "mod": False}, "content": "Recipient reply"},
+                {"author": {"id": "999", "mod": True}, "content": "Other AI output"},
+            ]
+        )
+        self.assertEqual(count_logged_intake_questions(messages, bot_user_id=999), 5)
+
     async def test_continuous_ai_test_asks_clarification_before_human_handoff(self):
         generator = GeminiContinuousTestReplyGenerator(FakeSession([]), "test-key")
         prompt = generator.build_prompt("[RECIPIENT MESSAGE]\nI need help with my ticket.")
