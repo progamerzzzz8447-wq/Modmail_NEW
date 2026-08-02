@@ -2286,7 +2286,9 @@ class Utility(commands.Cog):
     async def exporteverylogever(self, ctx):
         """Exports every ticket log for this server as chunked ZIP archives."""
         query = {"guild_id": str(self.bot.guild_id)}
-        cursor = self.bot.api.logs.find(query).sort("created_at", 1)
+        # Do not sort this export. Large installations can exceed MongoDB's 32 MB blocking-sort
+        # limit when `created_at` is not covered by an index, while export order has no meaning.
+        cursor = self.bot.api.logs.find(query).batch_size(50)
         upload_limit = getattr(ctx.guild, "filesize_limit", 8 * 1024 * 1024)
         # Leave room for ZIP metadata and Discord's attachment-size accounting.
         raw_chunk_limit = max(512_000, int(upload_limit * 0.70))
