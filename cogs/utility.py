@@ -2280,9 +2280,6 @@ class Utility(commands.Cog):
 
         await self.bot.add_reaction(ctx.message, "\u2705")
 
-
-async def setup(bot):
-    await bot.add_cog(Utility(bot))
     @commands.command()
     @checks.has_permissions(PermissionLevel.OWNER)
     @trigger_typing
@@ -2329,3 +2326,7 @@ async def setup(bot):
             )
             for path in archive_paths:
                 await ctx.send(file=discord.File(path, filename=os.path.basename(path)))
+
+
+async def setup(bot):
+    await bot.add_cog(Utility(bot))
