@@ -157,6 +157,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
                         "clarification_question": "",
                         "ticket_summary": "Recipient is asking about a gamepass payment.",
                         "primary_question": "When will the gamepass payment arrive?",
+                        "selected_autoreply": "Payment timing",
                     }
                 ),
             )
@@ -167,6 +168,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             "Recipient asked when payment arrives.",
             autoreply_sent=True,
             questions_asked=3,
+            autoreply_catalog={"Payment timing": "payment-alias"},
         )
 
         self.assertTrue(result["clear"])
@@ -174,6 +176,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["remaining_inquiries"], ["gamepass payment timing"])
         self.assertEqual(result["ticket_summary"], "Recipient is asking about a gamepass payment.")
         self.assertEqual(result["primary_question"], "When will the gamepass payment arrive?")
+        self.assertEqual(result["selected_autoreply"], "Payment timing")
         self.assertEqual(session.calls, 1)
         config = session.request[1]["json"]["generationConfig"]
         self.assertEqual(config["thinkingConfig"], {"thinkingLevel": "minimal"})
@@ -184,6 +187,8 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CLARIFICATION QUESTIONS ALREADY ASKED: 3", prompt)
         self.assertIn("Hand the ticket to staff as early as reasonably possible", prompt)
         self.assertIn("`ticket_summary`", prompt)
+        self.assertIn('"Payment timing": "payment-alias"', prompt)
+        self.assertNotIn("Use the application form", prompt)
 
     def test_decodes_utf8_text_attachment_for_aireply(self):
         self.assertEqual(

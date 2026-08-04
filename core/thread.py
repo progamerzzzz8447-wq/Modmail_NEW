@@ -1128,7 +1128,15 @@ class Thread:
             return
         self._opening_workflow_active = opening
         try:
-            await self.consider_ai_autoreply(message)
+            if autoreply_only:
+                await self.consider_ai_autoreply(message)
+            else:
+                # Full onboarding selects from every configured autoreply in the intake assessment
+                # itself. Keep the fixed game-pass detector deterministic, but do not make a second
+                # Gemini classification call here.
+                ticket_text = self._ai_ticket_text(message)
+                if has_roblox_game_pass_url(ticket_text):
+                    await self._run_roblox_game_pass_autoreply(message, ticket_text)
         finally:
             self._opening_workflow_active = False
 
@@ -1181,6 +1189,33 @@ class Thread:
             await self.channel.send("Could not assess the intake; awaiting an agent.")
             await self.channel.send("**You may now reply**")
             return
+        autoreplies = {}
+        alias_actions = {}
+        if not autoreply_only:
+            autoreplies, alias_actions, _ = self._resolve_ai_autoreplies(
+                current_text,
+                require_trigger=False,
+            )
+            try:
+                sent_types = await self.bot.api.get_ai_autoreplies_sent(self.channel.id)
+            except Exception:
+                sent_types = set()
+                logger.warning(
+                    "Failed to pre-load sent autoreplies for onboarding selection.",
+                    exc_info=True,
+                )
+            autoreplies = {
+                name: response
+                for name, response in autoreplies.items()
+                if resolve_ai_autoreply_type(name, alias_actions.get(name)) not in sent_types
+            }
+            alias_actions = {
+                name: action for name, action in alias_actions.items() if name in autoreplies
+            }
+        autoreply_catalog = {
+            name: (alias_actions.get(name) or {}).get("alias", "") or name
+            for name in autoreplies
+        }
         assessor = GeminiIntakeAssessment(
             self.bot.session,
             str(api_key),
@@ -1190,6 +1225,7 @@ class Thread:
             transcript,
             autoreply_sent=self._opening_autoreply_sent,
             questions_asked=intake_questions_asked,
+            autoreply_catalog=autoreply_catalog,
         )
         # A newer recipient message arrived while Gemini was assessing this batch. Its debounced
         # workflow owns the next response, so this stale result must never send a clarification.
@@ -1209,6 +1245,66 @@ class Thread:
             )
             await self.channel.send("**You may now reply**")
             return
+
+        selected_autoreply = result["selected_autoreply"]
+        if selected_autoreply is not None:
+            alias_action = alias_actions.get(selected_autoreply)
+            autoreply_type = resolve_ai_autoreply_type(selected_autoreply, alias_action)
+            try:
+                claimed = await self.bot.api.claim_ai_autoreply(
+                    self.channel.id,
+                    autoreply_type,
+                    selected_autoreply,
+                )
+            except Exception:
+                claimed = False
+                logger.error(
+                    "Onboarding autoreply was blocked because duplicate safety failed.",
+                    exc_info=True,
+                )
+            if claimed:
+                try:
+                    if alias_action is None:
+                        await self._send_ai_autoreply(
+                            selected_autoreply,
+                            autoreplies[selected_autoreply],
+                        )
+                    else:
+                        await self._execute_ai_alias(selected_autoreply, alias_action, message)
+                    self._opening_autoreply_sent = True
+                    actual_subscribers = self.bot.config["subscriptions"].get(str(self.id), [])
+                    self._opening_alias_subscribed = bool(
+                        actual_subscribers
+                        or (
+                            alias_action
+                            and any(
+                                step.strip().casefold().startswith("sub ")
+                                for step in alias_action.get("steps", [])
+                            )
+                        )
+                    )
+                    await self._log_ai_check(
+                        message,
+                        current_text,
+                        outcome="matched",
+                        detail="Selected from the complete onboarding autoreply catalogue.",
+                        selected_name=selected_autoreply,
+                        delivery_status=(
+                            f"AI alias `{alias_action['alias']}` executed in full."
+                            if alias_action
+                            else "AI autoreply delivered."
+                        ),
+                    )
+                    if self._opening_alias_subscribed:
+                        self._intake_collecting = False
+                        self._intake_handed_to_agent = True
+                        await self.channel.send("**You may now reply**")
+                    else:
+                        self._intake_collecting = True
+                    # Never stack an intake clarification or handoff on the selected autoreply.
+                    return
+                except Exception:
+                    logger.exception("Failed to execute the onboarding-selected autoreply.")
 
         # A recipient message can arrive after the opening snapshot while Gemini is working.
         # Give its configured autoreply priority before emitting a now-stale clarification.
@@ -1451,7 +1547,7 @@ class Thread:
         return has_legacy_autoreply and has_application_trigger(ticket_text)
 
     def _resolve_ai_autoreplies(
-        self, ticket_text: str
+        self, ticket_text: str, *, require_trigger: bool = True
     ) -> typing.Tuple[
         typing.Dict[str, str], typing.Dict[str, typing.Dict[str, typing.Any]], typing.List[str]
     ]:
@@ -1463,11 +1559,13 @@ class Thread:
 
         for key, entry in (self.bot.config.get("autoreplies") or {}).items():
             if not isinstance(entry, Mapping):
-                if has_application_trigger(ticket_text):
+                if not require_trigger or has_application_trigger(ticket_text):
                     choices[str(key)] = str(entry)
                 continue
 
-            if not has_configured_trigger(ticket_text, entry.get("triggers") or []):
+            if require_trigger and not has_configured_trigger(
+                ticket_text, entry.get("triggers") or []
+            ):
                 continue
 
             variants = [
