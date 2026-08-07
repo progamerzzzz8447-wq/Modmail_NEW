@@ -21,6 +21,7 @@ from discord.utils import escape_markdown
 from dateutil import parser
 
 from core import checks
+from core.message_autofill import AUTOFILL_STAFF_USER_ID, expand_staff_reply_markers
 from core.alias_parser import (
     AUTOREPLY_DISPLAY_NAME_LIMIT,
     AUTOREPLY_TOTAL_CHOICE_LIMIT,
@@ -2465,7 +2466,16 @@ class Modmail(commands.Cog):
         automatically embedding image URLs.
         """
 
-        # Ensure logs record only the reply text, not the command.
+        if ctx.author.id == AUTOFILL_STAFF_USER_ID:
+            recipient = ctx.thread.recipient
+            recipient_name = (
+                getattr(recipient, "display_name", None)
+                or getattr(recipient, "name", None)
+                or str(recipient)
+            )
+            msg = expand_staff_reply_markers(msg, recipient_name)
+
+        # Ensure logs record only the expanded reply text, not the command.
         ctx.message.content = msg
         async with safe_typing(ctx):
             await ctx.thread.reply(ctx.message, msg)
