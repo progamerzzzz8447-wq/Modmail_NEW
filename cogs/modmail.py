@@ -505,7 +505,6 @@ class Modmail(commands.Cog):
         await self.bot.wait_until_ready()
 
     @commands.command()
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     async def aisort(self, ctx):
         """Run one Gemini batch review over every open ticket."""
@@ -516,7 +515,6 @@ class Modmail(commands.Cog):
         await status.edit(content=f"Gemini review complete: {succeeded}/{total} ticket(s) reviewed.")
 
     @commands.command()
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def aisort1(self, ctx):
@@ -978,7 +976,6 @@ class Modmail(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.group(aliases=["autoreplies"], invoke_without_command=True)
-    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     async def autoreply(self, ctx, *, name: str.lower = None):
         """
@@ -1117,7 +1114,6 @@ class Modmail(commands.Cog):
         return None
 
     @autoreply.command(name="set", aliases=["add", "edit", "create"])
-    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     async def autoreply_set(self, ctx, name: str, *, value: commands.clean_content):
         """Create or update an AI-selectable set message."""
@@ -1210,7 +1206,6 @@ class Modmail(commands.Cog):
         )
 
     @autoreply.command(name="remove", aliases=["delete", "del"])
-    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     async def autoreply_remove(self, ctx, *, name: str.lower):
         """Delete an AI autoreply."""
@@ -2481,7 +2476,6 @@ class Modmail(commands.Cog):
             await ctx.thread.reply(ctx.message, msg)
 
     @commands.command(usage="<MESSAGE>")
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def fakeautoreply(self, ctx, *, message: str):
@@ -2520,7 +2514,6 @@ class Modmail(commands.Cog):
         self.bot.dispatch("thread_reply", ctx.thread, True, ctx.message, False, False)
 
     @commands.command()
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def aihi(self, ctx):
@@ -2546,7 +2539,6 @@ class Modmail(commands.Cog):
         self.bot.dispatch("thread_reply", ctx.thread, True, ctx.message, False, False)
 
     @commands.command(aliases=["aibye"])
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def aiclose(self, ctx):
@@ -2570,7 +2562,6 @@ class Modmail(commands.Cog):
         await ctx.thread.close(closer=ctx.author)
 
     @commands.command()
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def aitest(self, ctx, mode: str = None):
@@ -2638,7 +2629,6 @@ class Modmail(commands.Cog):
             )
 
     @commands.command()
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def airude(self, ctx):
@@ -2868,7 +2858,6 @@ class Modmail(commands.Cog):
         await ctx.thread.close(closer=ctx.author, after=24 * 60 * 60)
 
     @commands.command()
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     async def aicommands(self, ctx):
         """Show the available manual AI commands and autoreply management syntax."""
@@ -2952,7 +2941,6 @@ class Modmail(commands.Cog):
         return await ctx.send(embed=embed)
 
     @commands.command()
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def aireply(self, ctx, *, argument: str = ""):
@@ -2993,7 +2981,6 @@ class Modmail(commands.Cog):
         )
 
     @commands.command(aliases=["aisummarize"])
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def aisummarise(self, ctx):
@@ -3009,7 +2996,6 @@ class Modmail(commands.Cog):
         )
 
     @commands.command(aliases=["saireply"])
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def smartaireply(self, ctx, *, argument: str = ""):
@@ -3034,7 +3020,6 @@ class Modmail(commands.Cog):
         )
 
     @commands.command()
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def aiall(self, ctx, mode: str = None):
@@ -3096,7 +3081,6 @@ class Modmail(commands.Cog):
             await self._resolve_aiall_thread(ctx)
 
     @commands.command()
-    @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
     @checks.thread_only()
     async def annoyautoreply(self, ctx):
