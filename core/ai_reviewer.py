@@ -59,9 +59,7 @@ AI_ACKNOWLEDGEMENT_TRIGGERS = (
     "great thanks",
     "perfect thanks",
 )
-AI_TICKET_CLOSED_MESSAGE = """**:Disconnected2: | Ticket Closed**
-
-Thank you for reaching out to us today. We really appreciate you taking the time to get in touch, and we hope we were able to assist you.
+AI_TICKET_CLOSED_MESSAGE = """Thank you for reaching out to us today. We really appreciate you taking the time to get in touch, and we hope we were able to assist you.
 
 This ticket has now been **closed automatically**. If you have any further questions or require additional assistance, please do not hesitate to contact us again. We're always happy to help!
 

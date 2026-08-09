@@ -163,10 +163,11 @@ class Modmail(commands.Cog):
                 )
             except Exception:
                 logger.warning("AI initial-inquiry follow-up failed.", exc_info=True)
-        elif not getattr(thread, "_intake_handed_to_agent", False):
+        else:
             try:
-                # Later messages may run configured autoreplies and a post-autoreply resolved check,
-                # but never the ordinary automatic generative intake/clarification workflow.
+                # Every later recipient message is eligible for configured keyword autoreplies,
+                # even after intake has handed the ticket to a human. Subscribed tickets remain
+                # excluded by the branch above.
                 await thread.begin_followup_autoreply_workflow(message)
             except Exception:
                 logger.warning(

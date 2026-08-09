@@ -88,7 +88,8 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(is_acknowledgement_only("Okay, I need to appeal."))
 
     def test_automatic_aibye_uses_requested_closure_message(self):
-        self.assertTrue(AI_TICKET_CLOSED_MESSAGE.startswith("**:Disconnected2: | Ticket Closed**"))
+        self.assertTrue(AI_TICKET_CLOSED_MESSAGE.startswith("Thank you for reaching out"))
+        self.assertNotIn(":Disconnected2:", AI_TICKET_CLOSED_MESSAGE)
         self.assertIn("**closed automatically**", AI_TICKET_CLOSED_MESSAGE)
         self.assertIn("a **new ticket will automatically be created**", AI_TICKET_CLOSED_MESSAGE)
 
