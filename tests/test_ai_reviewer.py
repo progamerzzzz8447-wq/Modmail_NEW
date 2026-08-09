@@ -4,9 +4,11 @@ from types import SimpleNamespace
 
 from core.ai_reviewer import (
     AI_ALL_CLOSING,
+    AI_ACKNOWLEDGEMENT_TRIGGERS,
     AI_HELLO_MESSAGES,
     AI_INTAKE_GREETING,
     AI_INTAKE_MAX_QUESTIONS,
+    AI_TICKET_CLOSED_MESSAGE,
     AI_HELLO_FOOTER,
     AI_REPLY_FOOTER,
     ROBLOX_GAME_PASS_AUTOREPLY,
@@ -32,6 +34,7 @@ from core.ai_reviewer import (
     has_configured_trigger,
     has_department_transfer_intent,
     has_roblox_game_pass_url,
+    is_acknowledgement_only,
     is_ticket_routing_request,
     last_relayed_message_is_human_staff,
     parse_aireply_argument,
@@ -76,6 +79,19 @@ def generate_content_output(value):
 
 
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
+    def test_acknowledgements_cannot_trigger_an_onboarding_autoreply(self):
+        self.assertIn("ok thanks", AI_ACKNOWLEDGEMENT_TRIGGERS)
+        for message in ("ok thanks", "Thank you!", "got it", "perfect, thanks sir"):
+            with self.subTest(message=message):
+                self.assertTrue(is_acknowledgement_only(message))
+        self.assertFalse(is_acknowledgement_only("Thanks, but where are my results?"))
+        self.assertFalse(is_acknowledgement_only("Okay, I need to appeal."))
+
+    def test_automatic_aibye_uses_requested_closure_message(self):
+        self.assertTrue(AI_TICKET_CLOSED_MESSAGE.startswith("**:Disconnected2: | Ticket Closed**"))
+        self.assertIn("**closed automatically**", AI_TICKET_CLOSED_MESSAGE)
+        self.assertIn("a **new ticket will automatically be created**", AI_TICKET_CLOSED_MESSAGE)
+
     def test_intake_greeting_and_durable_five_question_cap(self):
         self.assertIn("Please tell me why you're opening a ticket", AI_INTAKE_GREETING)
         self.assertEqual(AI_INTAKE_MAX_QUESTIONS, 5)
@@ -188,6 +204,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Hand the ticket to staff as early as reasonably possible", prompt)
         self.assertIn("`ticket_summary`", prompt)
         self.assertIn('"Payment timing": "payment-alias"', prompt)
+        self.assertIn("There must be a new substantive question", prompt)
         self.assertNotIn("Use the application form", prompt)
 
     def test_decodes_utf8_text_attachment_for_aireply(self):

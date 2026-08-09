@@ -41,6 +41,7 @@ from core.ai_reviewer import (
     AI_REPLY_CLOSING,
     AI_REPLY_FOOTER,
     AI_TEST_HUMAN_MARKER,
+    AI_TICKET_CLOSED_MESSAGE,
     AI_TEXT_ATTACHMENT_MAX_BYTES,
     AI_TEXT_ATTACHMENT_EXTENSIONS,
     GeminiAnnoyReplyGenerator,
@@ -49,11 +50,13 @@ from core.ai_reviewer import (
     GeminiTicketChannelSummaryGenerator,
     GeminiTicketSummaryGenerator,
     NO_MATCH,
+    build_ticket_text,
     build_relayed_reply_transcript,
     decode_ai_text_attachment,
     find_command_references,
     finalize_generated_ai_reply,
     last_relayed_message_is_human_staff,
+    is_acknowledgement_only,
     parse_aireply_argument,
 )
 from core.ai_sorter import (
@@ -73,13 +76,7 @@ logger = getLogger(__name__)
 
 MANUAL_AI_ROLE_IDS = (1391515982417100951, 1516405254571298866, 1531741911784624238)
 RESOLVED_CATEGORY_ID = 1369044841366814871
-AI_CLOSE_MESSAGE = """**<:Disconnected2:1384981321364803614> | Ticket Closed**
-
-Thank you so much for reaching out to us today; we really appreciate your effort to get in touch. If you have any other questions or need further assistance in the future, please do not hesitate to contact us again. We're always here to help!
-
-*This ticket has now been closed. If you respond to this message it will create a new ticket.*
-
--# <:Arrow:1407482040785571850> All tickets are logged incase of misconduct by yourself, or a staff member."""
+AI_CLOSE_MESSAGE = AI_TICKET_CLOSED_MESSAGE
 DEFAULT_SMART_AI_CONTEXT_PATH = Path(__file__).resolve().parent.parent / "core" / "smart_ai_context.md"
 AI_SORT_TIMES = (
     datetime_time(hour=6, tzinfo=ZoneInfo("Europe/London")),
@@ -132,6 +129,13 @@ class Modmail(commands.Cog):
         if getattr(thread, "_opening_intake_pending", False):
             if not getattr(thread, "_opening_collection_open", False):
                 thread._pending_followup_message = message
+            return
+
+        if is_acknowledgement_only(build_ticket_text(message)):
+            try:
+                await thread.begin_acknowledgement_closure_workflow(message)
+            except Exception:
+                logger.warning("AI acknowledgement closure check failed.", exc_info=True)
             return
 
         if key in self._ai_test_threads:

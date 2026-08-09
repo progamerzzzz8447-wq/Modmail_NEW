@@ -38,6 +38,36 @@ AI_INTAKE_HANDOFF = (
     "appropriate team. Please await a response from a member of staff."
 )
 AI_INTAKE_MAX_QUESTIONS = 5
+AI_ACKNOWLEDGEMENT_TRIGGERS = (
+    "ok",
+    "okay",
+    "alright",
+    "understood",
+    "i understand",
+    "got it",
+    "great",
+    "perfect",
+    "thanks",
+    "thank you",
+    "ty",
+    "cheers",
+    "ok thanks",
+    "okay thanks",
+    "alright thanks",
+    "understood thanks",
+    "got it thanks",
+    "great thanks",
+    "perfect thanks",
+)
+AI_TICKET_CLOSED_MESSAGE = """**:Disconnected2: | Ticket Closed**
+
+Thank you for reaching out to us today. We really appreciate you taking the time to get in touch, and we hope we were able to assist you.
+
+This ticket has now been **closed automatically**. If you have any further questions or require additional assistance, please do not hesitate to contact us again. We're always happy to help!
+
+If you reply to this message, a **new ticket will automatically be created**.
+
+If you believe this ticket was closed in error, please specify the reason below."""
 AI_TEXT_ATTACHMENT_MAX_BYTES = 200_000
 AI_TEXT_ATTACHMENT_EXTENSIONS = (".txt", ".md", ".markdown")
 AI_HELLO_FOOTER = AI_REPLY_FOOTER
@@ -158,6 +188,19 @@ def count_logged_intake_questions(
 def has_roblox_game_pass_url(text: str) -> bool:
     """Return whether a recipient message contains the Roblox game-pass URL."""
     return bool(ROBLOX_GAME_PASS_URL_PATTERN.search(str(text or "")))
+
+
+def is_acknowledgement_only(text: str) -> bool:
+    """Return whether the latest recipient turn is only thanks/acknowledgement."""
+    normalized = re.sub(r"[^a-z0-9'\s]", " ", str(text or "").casefold())
+    normalized = " ".join(normalized.split())
+    if not normalized:
+        return False
+    for suffix in (" sir", " mate", " for that", " for your help"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)].strip()
+            break
+    return normalized in AI_ACKNOWLEDGEMENT_TRIGGERS
 
 
 def find_command_references(text: str, *, prefix: str = "?") -> typing.Set[str]:
@@ -945,7 +988,11 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             "catalogue below on every intake assessment, regardless of keywords. Catalogue values "
             "are alias identifiers, not reply contents. Select an autoreply only when its display "
             "name clearly and specifically fits what the recipient is asking across all of their "
-            "messages. A shared subject or vague similarity is not enough. Otherwise select "
+            "messages, with the latest recipient turn controlling the decision. There must be a new "
+            "substantive question or request in that latest turn. If it is only thanks, an "
+            "acknowledgement, confirmation, or conversational closing, select no autoreply; never "
+            "reinterpret an older issue to select a different related autoreply. A shared subject or "
+            "vague similarity is not enough. Otherwise select "
             f"`{NO_MATCH}`. Never expose alias identifiers to the recipient. Return structured JSON "
             "only.\n\n"
             f"AUTOREPLY SENT: {bool(autoreply_sent)}\n"

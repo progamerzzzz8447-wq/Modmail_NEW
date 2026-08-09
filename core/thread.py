@@ -29,6 +29,7 @@ from core.ai_reviewer import (
     AI_INTAKE_GREETING,
     AI_INTAKE_HANDOFF,
     AI_INTAKE_MAX_QUESTIONS,
+    AI_TICKET_CLOSED_MESSAGE,
     ROBLOX_GAME_PASS_AUTOREPLY,
     GeminiAutoReplyReviewer,
     GeminiIntakeAssessment,
@@ -40,6 +41,7 @@ from core.ai_reviewer import (
     has_application_trigger,
     has_configured_trigger,
     has_roblox_game_pass_url,
+    is_acknowledgement_only,
     resolve_ai_autoreply_type,
 )
 from core.alias_parser import (
@@ -1191,7 +1193,7 @@ class Thread:
             return
         autoreplies = {}
         alias_actions = {}
-        if not autoreply_only:
+        if not autoreply_only and not is_acknowledgement_only(current_text):
             autoreplies, alias_actions, _ = self._resolve_ai_autoreplies(
                 current_text,
                 require_trigger=False,
@@ -1453,6 +1455,97 @@ class Thread:
                 autoreply_only=not full_intake,
                 followup_revision=revision,
             )
+
+    async def begin_acknowledgement_closure_workflow(
+        self,
+        message,
+        delay: float = 3.0,
+    ) -> None:
+        """Debounce an acknowledgement, then close or re-ping subscribers after one AI check."""
+        self._followup_revision += 1
+        revision = self._followup_revision
+        await asyncio.sleep(delay)
+        if revision != self._followup_revision or self._opening_intake_pending:
+            return
+
+        async with self._intake_workflow_lock:
+            if revision != self._followup_revision:
+                return
+            api_key = self.bot.config.get("gemini_api_key", convert=False)
+            if not api_key or self.bot.session is None:
+                return
+            try:
+                log_entry = await self.bot.api.get_log(self.channel.id)
+                from core.ai_sorter import build_sorting_transcript
+
+                transcript = build_sorting_transcript(
+                    (log_entry or {}).get("messages") or [],
+                    bot_user_id=self.bot.user.id,
+                )
+                current_text = build_ticket_text(message)
+                if current_text:
+                    transcript += "\n\n---\n\n[LATEST RECIPIENT ACKNOWLEDGEMENT]\n" + current_text
+                questions_asked = count_logged_intake_questions(
+                    (log_entry or {}).get("messages") or [],
+                    bot_user_id=self.bot.user.id,
+                )
+            except Exception:
+                logger.warning("Could not build acknowledgement closure transcript.", exc_info=True)
+                return
+
+            assessor = GeminiIntakeAssessment(
+                self.bot.session,
+                str(api_key),
+                model=AI_INTAKE_MODEL,
+            )
+            result = await assessor.assess(
+                transcript,
+                autoreply_sent=True,
+                questions_asked=questions_asked,
+                autoreply_catalog={},
+            )
+            if result is None or revision != self._followup_revision:
+                return
+
+            outstanding = [
+                inquiry.strip()
+                for inquiry in result["remaining_inquiries"]
+                if inquiry.strip()
+            ]
+            if outstanding or not result["resolved"]:
+                question = "; ".join(outstanding) or result["primary_question"]
+                mentions = " ".join(
+                    dict.fromkeys(self.bot.config["subscriptions"].get(str(self.id), []))
+                )
+                prefix = f"{mentions} " if mentions else ""
+                await self.channel.send(
+                    f"{prefix}**Reply requested — outstanding question:** "
+                    f"{question or 'The recipient still requires assistance.'}"
+                )
+                await self._log_ai_check(
+                    message,
+                    current_text,
+                    outcome="needs_follow_up",
+                    detail=f"Acknowledgement received with an outstanding inquiry: {question}",
+                    selected_name="acknowledgement resolution check",
+                    delivery_status="Subscribed users were pinged again; ticket remains open.",
+                )
+                return
+
+            await self._send_ai_autoreply(
+                "Automatic AI ticket closure",
+                AI_TICKET_CLOSED_MESSAGE,
+            )
+            await self._log_ai_check(
+                message,
+                current_text,
+                outcome="resolved",
+                detail="Acknowledgement received and no unanswered inquiry remained.",
+                selected_name="automatic aibye",
+                response_text=AI_TICKET_CLOSED_MESSAGE,
+                delivery_status="Automatic AI closure delivered and ticket closed.",
+            )
+            await self.close(closer=self.bot.user)
 
     async def _run_roblox_game_pass_autoreply(self, message, ticket_text: str) -> None:
         """Send the fixed game-pass guidance once per ticket without calling Gemini."""
