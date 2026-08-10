@@ -111,6 +111,25 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(count_logged_intake_questions(messages, bot_user_id=999), 5)
 
+    def test_autoreply_alternatives_share_the_parent_group_duplicate_type(self):
+        primary = {"alias": "application-review", "group": "application timing"}
+        alternative = {"alias": "missing-results", "group": "application timing"}
+        self.assertEqual(
+            resolve_ai_autoreply_type("Application review time", primary),
+            "group:application timing",
+        )
+        self.assertEqual(
+            resolve_ai_autoreply_type("Missing application results", alternative),
+            "group:application timing",
+        )
+        self.assertNotEqual(
+            resolve_ai_autoreply_type(
+                "Ground Operations application",
+                {"alias": "ground-ops", "group": "ground operations"},
+            ),
+            "group:application timing",
+        )
+
     async def test_continuous_ai_test_asks_clarification_before_human_handoff(self):
         generator = GeminiContinuousTestReplyGenerator(FakeSession([]), "test-key")
         prompt = generator.build_prompt("[RECIPIENT MESSAGE]\nI need help with my ticket.")

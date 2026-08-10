@@ -1718,6 +1718,7 @@ class Thread:
                 choices[display_name] = combined_message
                 alias_actions[display_name] = {
                     "alias": alias_name,
+                    "group": str(key).strip(),
                     "steps": parse_alias(raw_alias),
                     "additional_info": str(entry.get("additional_info") or "").strip(),
                 }

@@ -54,6 +54,17 @@ def has_any_role_id(*role_ids: int):
     return commands.check(predicate)
 
 
+def has_user_id(*user_ids: int):
+    """Require the invoking account to have one of the supplied exact Discord user IDs."""
+    allowed_user_ids = frozenset(int(user_id) for user_id in user_ids)
+
+    async def predicate(ctx):
+        return getattr(ctx.author, "id", None) in allowed_user_ids
+
+    predicate.fail_msg = "You are not permitted to use this restricted command."
+    return commands.check(predicate)
+
+
 async def check_permissions(ctx, command_name) -> bool:
     """Logic for checking permissions for a command for a user"""
     if await ctx.bot.is_owner(ctx.author) or ctx.author.id == ctx.bot.user.id:

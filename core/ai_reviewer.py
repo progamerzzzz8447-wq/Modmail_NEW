@@ -251,8 +251,11 @@ def resolve_ai_autoreply_type(
     selected_name: str,
     alias_action: typing.Optional[typing.Mapping[str, typing.Any]] = None,
 ) -> str:
-    """Use an alias name as its type, otherwise use the configured reply name."""
-    value = alias_action.get("alias") if alias_action is not None else selected_name
+    """Use the parent autoreply group as the durable type for every variant in it."""
+    if alias_action is not None and alias_action.get("group"):
+        value = f"group:{alias_action['group']}"
+    else:
+        value = alias_action.get("alias") if alias_action is not None else selected_name
     return normalize_ai_autoreply_type(value)
 
 

@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import copy
 import re
 import secrets
 from datetime import datetime, time as datetime_time, timezone, timedelta
@@ -2479,6 +2480,23 @@ class Modmail(commands.Cog):
         ctx.message.content = msg
         async with safe_typing(ctx):
             await ctx.thread.reply(ctx.message, msg)
+
+    @commands.command(name="sr", usage="<USER> <MESSAGE>")
+    @checks.has_user_id(1458951643377963178)
+    @checks.thread_only()
+    async def spoofreply(
+        self,
+        ctx,
+        user: Union[discord.Member, discord.User],
+        *,
+        message: str,
+    ):
+        """Send and log a thread reply under another user's visible identity."""
+        synthetic = DummyMessage(copy.copy(ctx.message))
+        synthetic.author = user
+        synthetic.content = message
+        async with safe_typing(ctx):
+            await ctx.thread.reply(synthetic, message)
 
     @commands.command(usage="<MESSAGE>")
     @checks.has_any_role_id(*MANUAL_AI_ROLE_IDS)
