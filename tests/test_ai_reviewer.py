@@ -33,6 +33,7 @@ from core.ai_reviewer import (
     extract_blank_form_fields,
     enforce_recipient_discord_username,
     finalize_generated_ai_reply,
+    form_value_requires_exact_evidence,
     find_command_references,
     generate_ai_message_joint_id,
     has_application_trigger,
@@ -174,6 +175,32 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(FORM_AUTOFILL_NOTICE, rendered)
         self.assertIn("DISCORD USERNAME (A): ticket_writer", rendered)
         self.assertIn("Please allow 48 hours.", rendered)
+
+    def test_attached_fences_are_preserved_and_not_treated_as_field_text(self):
+        alias = "Intro\n```DISCORD USERNAME\n~ DATE OF APPLICATION```\nAfter"
+        fields = extract_blank_form_fields(alias)
+        self.assertEqual(
+            fields,
+            [
+                {"field_id": "field_1", "label": "DISCORD USERNAME"},
+                {"field_id": "field_2", "label": "~ DATE OF APPLICATION"},
+            ],
+        )
+        rendered = apply_form_autofills(alias, {"field_1": "ticket_writer"})
+        self.assertIn("```\nDISCORD USERNAME (A): ticket_writer", rendered)
+        self.assertIn("~ DATE OF APPLICATION\n```\nAfter", rendered)
+        self.assertNotIn("APPLICATION``` (A)", rendered)
+
+    def test_sensitive_form_values_require_exact_recipient_evidence(self):
+        for label in (
+            "DISCORD USERNAME",
+            "DATE OF APPLICATION",
+            "FLIGHT CODE",
+            "AMOUNT PAID",
+            "APPLICATION ID",
+        ):
+            self.assertTrue(form_value_requires_exact_evidence(label))
+        self.assertFalse(form_value_requires_exact_evidence("REASON FOR APPEAL"))
 
     async def test_gemini_form_autofill_returns_only_structured_field_values(self):
         session = FakeSession(
@@ -341,6 +368,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
                     {"field_id": "field_1", "label": "What did you purchase"}
                 ]
             },
+            trusted_recipient_username="ticket_writer",
         )
 
         self.assertTrue(result["clear"])
@@ -361,6 +389,8 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Hand the ticket to staff as early as reasonably possible", prompt)
         self.assertIn("`ticket_summary`", prompt)
         self.assertIn('"Payment timing": "payment-alias"', prompt)
+        self.assertIn("TRUSTED RECIPIENT DISCORD USERNAME: ticket_writer", prompt)
+        self.assertIn("For disciplinary appeals", prompt)
         self.assertIn("There must be a new substantive question", prompt)
         self.assertNotIn("Use the application form", prompt)
 

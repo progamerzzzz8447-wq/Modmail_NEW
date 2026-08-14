@@ -1239,6 +1239,9 @@ class Thread:
             questions_asked=intake_questions_asked,
             autoreply_catalog=autoreply_catalog,
             autoreply_forms=autoreply_forms,
+            trusted_recipient_username=str(
+                getattr(getattr(message, "author", None), "name", "") or ""
+            ),
         )
         # A newer recipient message arrived while Gemini was assessing this batch. Its debounced
         # workflow owns the next response, so this stale result must never send a clarification.
