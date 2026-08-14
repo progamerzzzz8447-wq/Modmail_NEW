@@ -242,10 +242,10 @@ def extract_blank_form_fields(text: str) -> typing.List[typing.Dict[str, str]]:
             continue
         if not in_fence:
             continue
-        match = re.match(r"^\s*(\*\*)?([^:\n]+?):(\*\*)?\s*$", line)
-        if match is None or bool(match.group(1)) != bool(match.group(3)):
+        match = re.match(r"^\s*(\*\*)?(.+?)([:?])(\*\*)?\s*$", line)
+        if match is None or bool(match.group(1)) != bool(match.group(4)):
             continue
-        label = match.group(2).strip()
+        label = match.group(2).strip() + ("?" if match.group(3) == "?" else "")
         if not label:
             continue
         fields.append({"field_id": f"field_{len(fields) + 1}", "label": label})
@@ -274,14 +274,15 @@ def apply_form_autofills(text: str, fills: typing.Mapping[str, str]) -> str:
             continue
         body = line.rstrip("\r\n")
         newline = line[len(body) :]
-        match = re.match(r"^(\s*)(\*\*)?([^:\n]+?):(\*\*)?\s*$", body)
-        if match is None or bool(match.group(2)) != bool(match.group(4)):
+        match = re.match(r"^(\s*)(\*\*)?(.+?)([:?])(\*\*)?\s*$", body)
+        if match is None or bool(match.group(2)) != bool(match.group(5)):
             continue
         field_index += 1
         value = cleaned_fills.get(f"field_{field_index}")
         if value is None:
             continue
-        indent, bold, label = match.group(1), match.group(2), match.group(3).strip()
+        indent, bold = match.group(1), match.group(2)
+        label = match.group(3).strip() + ("?" if match.group(4) == "?" else "")
         if bold:
             lines[index] = f"{indent}**{label} (A):** {value}{newline}"
         else:

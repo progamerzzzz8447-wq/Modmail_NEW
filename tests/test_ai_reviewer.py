@@ -89,7 +89,8 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         alias = (
             "Please complete this report form.\n\n"
             "```\nROBLOX USERNAME:\n**YOUR DISCORD USERNAME:**\n"
-            "THEIR DISCORD USERNAME:\n```\n\nAttach evidence if available."
+            "THEIR DISCORD USERNAME:\nWhat did you purchase?\nWhat issue occurred?\n"
+            "```\n\nAttach evidence if available."
         )
         fields = extract_blank_form_fields(alias)
         self.assertEqual(
@@ -98,11 +99,18 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
                 {"field_id": "field_1", "label": "ROBLOX USERNAME"},
                 {"field_id": "field_2", "label": "YOUR DISCORD USERNAME"},
                 {"field_id": "field_3", "label": "THEIR DISCORD USERNAME"},
+                {"field_id": "field_4", "label": "What did you purchase?"},
+                {"field_id": "field_5", "label": "What issue occurred?"},
             ],
         )
         rendered = apply_form_autofills(
             alias,
-            {"field_1": "1231431421", "field_2": "recipient_name"},
+            {
+                "field_1": "1231431421",
+                "field_2": "recipient_name",
+                "field_4": "Comfort seat upgrade",
+                "field_5": "Unknown error while using the upgrade",
+            },
         )
         self.assertIn("Please complete this report form.", rendered)
         self.assertIn(FORM_AUTOFILL_NOTICE, rendered)
@@ -114,6 +122,11 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ROBLOX USERNAME (A): 1231431421", rendered)
         self.assertIn("**YOUR DISCORD USERNAME (A):** recipient_name", rendered)
         self.assertIn("THEIR DISCORD USERNAME:\n", rendered)
+        self.assertIn("What did you purchase? (A): Comfort seat upgrade", rendered)
+        self.assertIn(
+            "What issue occurred? (A): Unknown error while using the upgrade",
+            rendered,
+        )
         self.assertTrue(rendered.endswith("Attach evidence if available."))
 
     def test_recipient_discord_username_is_a_trusted_form_fill(self):
