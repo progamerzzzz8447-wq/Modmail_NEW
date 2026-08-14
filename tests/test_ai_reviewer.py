@@ -9,6 +9,7 @@ from core.ai_reviewer import (
     AI_INTAKE_GREETING,
     AI_INTAKE_MAX_QUESTIONS,
     AI_TICKET_CLOSED_MESSAGE,
+    FORM_AUTOFILL_NOTICE,
     AI_HELLO_FOOTER,
     AI_REPLY_FOOTER,
     ROBLOX_GAME_PASS_AUTOREPLY,
@@ -16,16 +17,19 @@ from core.ai_reviewer import (
     GeminiAnnoyReplyGenerator,
     GeminiAutoReplyReviewer,
     GeminiContinuousTestReplyGenerator,
+    GeminiFormAutofill,
     GeminiHelpfulReplyGenerator,
     GeminiIntakeAssessment,
     GeminiTicketChannelSummaryGenerator,
     GeminiTicketSummaryGenerator,
     build_autoreply_context,
+    apply_form_autofills,
     build_relayed_reply_transcript,
     count_logged_intake_questions,
     build_ticket_text,
     describe_ai_error,
     decode_ai_text_attachment,
+    extract_blank_form_fields,
     finalize_generated_ai_reply,
     find_command_references,
     generate_ai_message_joint_id,
@@ -79,6 +83,51 @@ def generate_content_output(value):
 
 
 class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
+    def test_fenced_alias_form_autofill_preserves_surrounding_text(self):
+        alias = (
+            "Please complete this report form.\n\n"
+            "```\nROBLOX USERNAME:\n**YOUR DISCORD USERNAME:**\n"
+            "THEIR DISCORD USERNAME:\n```\n\nAttach evidence if available."
+        )
+        fields = extract_blank_form_fields(alias)
+        self.assertEqual(
+            fields,
+            [
+                {"field_id": "field_1", "label": "ROBLOX USERNAME"},
+                {"field_id": "field_2", "label": "YOUR DISCORD USERNAME"},
+                {"field_id": "field_3", "label": "THEIR DISCORD USERNAME"},
+            ],
+        )
+        rendered = apply_form_autofills(
+            alias,
+            {"field_1": "1231431421", "field_2": "recipient_name"},
+        )
+        self.assertIn("Please complete this report form.", rendered)
+        self.assertIn(FORM_AUTOFILL_NOTICE, rendered)
+        self.assertIn("ROBLOX USERNAME (A): 1231431421", rendered)
+        self.assertIn("**YOUR DISCORD USERNAME (A):** recipient_name", rendered)
+        self.assertIn("THEIR DISCORD USERNAME:\n", rendered)
+        self.assertTrue(rendered.endswith("Attach evidence if available."))
+
+    async def test_gemini_form_autofill_returns_only_structured_field_values(self):
+        session = FakeSession(
+            FakeResponse(
+                200,
+                generate_content_output(
+                    {"fills": [{"field_id": "field_1", "value": "ExampleUser"}]}
+                ),
+            )
+        )
+        reviewer = GeminiFormAutofill(session, "key", model="gemini-3.1-flash-lite")
+        fills = await reviewer.identify_fills(
+            "[RECIPIENT MESSAGE]\nMy Roblox username is ExampleUser.",
+            [{"field_id": "field_1", "label": "ROBLOX USERNAME"}],
+        )
+        self.assertEqual(fills, {"field_1": "ExampleUser"})
+        prompt = session.request[1]["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("Use recipient-authored messages as the source", prompt)
+        self.assertIn('"label": "ROBLOX USERNAME"', prompt)
+
     def test_acknowledgements_cannot_trigger_an_onboarding_autoreply(self):
         self.assertIn("ok thanks", AI_ACKNOWLEDGEMENT_TRIGGERS)
         for message in ("ok thanks", "Thank you!", "got it", "perfect, thanks sir"):

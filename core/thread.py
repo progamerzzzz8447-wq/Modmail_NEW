@@ -32,11 +32,14 @@ from core.ai_reviewer import (
     AI_TICKET_CLOSED_MESSAGE,
     ROBLOX_GAME_PASS_AUTOREPLY,
     GeminiAutoReplyReviewer,
+    GeminiFormAutofill,
     GeminiIntakeAssessment,
+    apply_form_autofills,
     build_autoreply_context,
     count_logged_intake_questions,
     build_ticket_text,
     describe_ai_error,
+    extract_blank_form_fields,
     generate_ai_message_joint_id,
     has_application_trigger,
     has_configured_trigger,
@@ -1783,6 +1786,11 @@ class Thread:
                             author=self.bot.user,
                         )
 
+                    response_text = await self._autofill_alias_form(
+                        response_text,
+                        source_message,
+                    )
+
                     await self._send_ai_autoreply(display_name, response_text)
                     continue
                 await self._invoke_ai_alias_step(step, source_message)
@@ -1797,6 +1805,39 @@ class Thread:
                 "One or more AI alias actions failed after all steps were attempted: "
                 + "; ".join(action_errors)
             )
+
+    async def _autofill_alias_form(self, response_text: str, source_message) -> str:
+        """Auto-fill blank fenced form fields from explicit recipient ticket context."""
+        fields = extract_blank_form_fields(response_text)
+        if not fields:
+            return response_text
+        api_key = self.bot.config.get("gemini_api_key", convert=False)
+        if not api_key or self.bot.session is None:
+            return response_text
+        try:
+            log_entry = await self.bot.api.get_log(self.channel.id)
+            from core.ai_sorter import build_sorting_transcript
+
+            transcript = build_sorting_transcript(
+                (log_entry or {}).get("messages") or [],
+                bot_user_id=self.bot.user.id,
+            )
+            current_text = build_ticket_text(source_message)
+            if current_text:
+                transcript += "\n\n---\n\n[CURRENT RECIPIENT MESSAGE]\n" + current_text
+        except Exception:
+            logger.warning("Could not build alias form-autofill context.", exc_info=True)
+            return response_text
+
+        reviewer = GeminiFormAutofill(
+            self.bot.session,
+            str(api_key),
+            model=AI_INTAKE_MODEL,
+        )
+        fills = await reviewer.identify_fills(transcript, fields)
+        if not fills:
+            return response_text
+        return apply_form_autofills(response_text, fills)
 
     async def _run_ai_review(self, message, ticket_text: str) -> None:
         """Run Gemini for one qualifying recipient message, failing open on every error."""
