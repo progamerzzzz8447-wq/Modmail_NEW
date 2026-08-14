@@ -59,6 +59,23 @@ AI_ACKNOWLEDGEMENT_TRIGGERS = (
     "great thanks",
     "perfect thanks",
 )
+AI_ACKNOWLEDGEMENT_CONTAINS_TRIGGERS = (
+    "ok",
+    "okay",
+    "alright",
+    "understood",
+    "got it",
+    "thanks",
+    "thank you",
+    "ty",
+    "tysm",
+    "cheers",
+    "no",
+    "nope",
+    "all",
+)
+AI_ACKNOWLEDGEMENT_MAX_WORDS = 12
+AI_ACKNOWLEDGEMENT_MAX_CHARACTERS = 140
 AI_TICKET_CLOSED_MESSAGE = """Thank you for reaching out to us today. We really appreciate you taking the time to get in touch, and we hope we were able to assist you.
 
 This ticket has now been **closed automatically**. If you have any further questions or require additional assistance, please do not hesitate to contact us again. We're always happy to help!
@@ -69,10 +86,7 @@ If you believe this ticket was closed in error, please specify the reason below.
 AI_TEXT_ATTACHMENT_MAX_BYTES = 200_000
 AI_TEXT_ATTACHMENT_EXTENSIONS = (".txt", ".md", ".markdown")
 FORM_AUTOFILL_NOTICE = (
-    "As you have already provided some information, parts of the form have been automatically "
-    "filled in for you. Please review and confirm that all information is correct before "
-    "submitting your reply.\n\n"
-    "Fields marked **(A)** have been auto-filled based on the information you have already "
+    "Fields marked (A) have been auto-filled based on the information you have already "
     "provided, but may require additional details."
 )
 AI_HELLO_FOOTER = AI_REPLY_FOOTER
@@ -196,11 +210,21 @@ def has_roblox_game_pass_url(text: str) -> bool:
 
 
 def is_acknowledgement_only(text: str) -> bool:
-    """Return whether the latest recipient turn is only thanks/acknowledgement."""
+    """Return whether a short recipient turn contains a closure-check trigger."""
     normalized = re.sub(r"[^a-z0-9'\s]", " ", str(text or "").casefold())
     normalized = " ".join(normalized.split())
     if not normalized:
         return False
+    if (
+        len(normalized) > AI_ACKNOWLEDGEMENT_MAX_CHARACTERS
+        or len(normalized.split()) > AI_ACKNOWLEDGEMENT_MAX_WORDS
+    ):
+        return False
+    if any(
+        re.search(rf"(?<![a-z0-9]){re.escape(trigger)}(?![a-z0-9])", normalized)
+        for trigger in AI_ACKNOWLEDGEMENT_CONTAINS_TRIGGERS
+    ):
+        return True
     for suffix in (" sir", " mate", " for that", " for your help"):
         if normalized.endswith(suffix):
             normalized = normalized[: -len(suffix)].strip()
@@ -274,6 +298,27 @@ def apply_form_autofills(text: str, fills: typing.Mapping[str, str]) -> str:
     if before and not before.endswith("\n\n"):
         before = before.rstrip("\r\n") + "\n\n"
     return f"{before}{FORM_AUTOFILL_NOTICE}\n\n{after}"
+
+
+def recipient_username_form_fills(
+    fields: typing.Sequence[typing.Mapping[str, str]],
+    recipient_username: str,
+) -> typing.Dict[str, str]:
+    """Provide trusted fills for fields asking for the ticket recipient's Discord username."""
+    username = str(recipient_username or "").strip()
+    if not username:
+        return {}
+    fills = {}
+    for field in fields:
+        normalized_label = " ".join(
+            re.sub(r"[^a-z0-9]+", " ", str(field.get("label") or "").casefold()).split()
+        )
+        words = set(normalized_label.split())
+        if (
+            "username" in words and "your" in words and "their" not in words
+        ) or normalized_label == "discord username":
+            fills[str(field.get("field_id") or "")] = username
+    return {field_id: value for field_id, value in fills.items() if field_id}
 
 
 def find_command_references(text: str, *, prefix: str = "?") -> typing.Set[str]:

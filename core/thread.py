@@ -45,6 +45,7 @@ from core.ai_reviewer import (
     has_configured_trigger,
     has_roblox_game_pass_url,
     is_acknowledgement_only,
+    recipient_username_form_fills,
     resolve_ai_autoreply_type,
 )
 from core.alias_parser import (
@@ -1811,9 +1812,17 @@ class Thread:
         fields = extract_blank_form_fields(response_text)
         if not fields:
             return response_text
+        recipient_username = str(getattr(self.recipient, "name", "") or "").strip()
+        trusted_fills = recipient_username_form_fills(fields, recipient_username)
+
+        remaining_fields = [
+            field for field in fields if field["field_id"] not in trusted_fills
+        ]
+        if not remaining_fields:
+            return apply_form_autofills(response_text, trusted_fills)
         api_key = self.bot.config.get("gemini_api_key", convert=False)
         if not api_key or self.bot.session is None:
-            return response_text
+            return apply_form_autofills(response_text, trusted_fills)
         try:
             log_entry = await self.bot.api.get_log(self.channel.id)
             from core.ai_sorter import build_sorting_transcript
@@ -1834,10 +1843,10 @@ class Thread:
             str(api_key),
             model=AI_INTAKE_MODEL,
         )
-        fills = await reviewer.identify_fills(transcript, fields)
-        if not fills:
-            return response_text
-        return apply_form_autofills(response_text, fills)
+        fills = await reviewer.identify_fills(transcript, remaining_fields)
+        combined_fills = dict(trusted_fills)
+        combined_fills.update(fills or {})
+        return apply_form_autofills(response_text, combined_fills)
 
     async def _run_ai_review(self, message, ticket_text: str) -> None:
         """Run Gemini for one qualifying recipient message, failing open on every error."""

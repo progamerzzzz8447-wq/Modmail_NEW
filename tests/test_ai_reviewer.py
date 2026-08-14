@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from core.ai_reviewer import (
     AI_ALL_CLOSING,
     AI_ACKNOWLEDGEMENT_TRIGGERS,
+    AI_ACKNOWLEDGEMENT_CONTAINS_TRIGGERS,
     AI_HELLO_MESSAGES,
     AI_INTAKE_GREETING,
     AI_INTAKE_MAX_QUESTIONS,
@@ -42,6 +43,7 @@ from core.ai_reviewer import (
     is_ticket_routing_request,
     last_relayed_message_is_human_staff,
     parse_aireply_argument,
+    recipient_username_form_fills,
     resolve_ai_autoreply_type,
 )
 
@@ -104,10 +106,27 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("Please complete this report form.", rendered)
         self.assertIn(FORM_AUTOFILL_NOTICE, rendered)
+        self.assertEqual(
+            FORM_AUTOFILL_NOTICE,
+            "Fields marked (A) have been auto-filled based on the information you have already "
+            "provided, but may require additional details.",
+        )
         self.assertIn("ROBLOX USERNAME (A): 1231431421", rendered)
         self.assertIn("**YOUR DISCORD USERNAME (A):** recipient_name", rendered)
         self.assertIn("THEIR DISCORD USERNAME:\n", rendered)
         self.assertTrue(rendered.endswith("Attach evidence if available."))
+
+    def test_recipient_discord_username_is_a_trusted_form_fill(self):
+        fields = [
+            {"field_id": "field_1", "label": "YOUR DISCORD USERNAME"},
+            {"field_id": "field_2", "label": "DISCORD USERNAME"},
+            {"field_id": "field_3", "label": "THEIR DISCORD USERNAME"},
+            {"field_id": "field_4", "label": "ROBLOX USERNAME"},
+        ]
+        self.assertEqual(
+            recipient_username_form_fills(fields, "ticket_writer"),
+            {"field_1": "ticket_writer", "field_2": "ticket_writer"},
+        )
 
     async def test_gemini_form_autofill_returns_only_structured_field_values(self):
         session = FakeSession(
@@ -130,11 +149,24 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
 
     def test_acknowledgements_cannot_trigger_an_onboarding_autoreply(self):
         self.assertIn("ok thanks", AI_ACKNOWLEDGEMENT_TRIGGERS)
+        self.assertIn("tysm", AI_ACKNOWLEDGEMENT_CONTAINS_TRIGGERS)
         for message in ("ok thanks", "Thank you!", "got it", "perfect, thanks sir"):
             with self.subTest(message=message):
                 self.assertTrue(is_acknowledgement_only(message))
-        self.assertFalse(is_acknowledgement_only("Thanks, but where are my results?"))
-        self.assertFalse(is_acknowledgement_only("Okay, I need to appeal."))
+        for message in (
+            "Thanks, but where are my results?",
+            "Okay, I need to appeal.",
+            "nope that is all for today",
+            "tysm, that's all",
+        ):
+            with self.subTest(message=message):
+                self.assertTrue(is_acknowledgement_only(message))
+        self.assertFalse(is_acknowledgement_only("knowledge"))
+        self.assertFalse(
+            is_acknowledgement_only(
+                "Thanks " + "this is deliberately a much longer substantive message " * 3
+            )
+        )
 
     def test_automatic_aibye_uses_requested_closure_message(self):
         self.assertTrue(AI_TICKET_CLOSED_MESSAGE.startswith("Thank you for reaching out"))
