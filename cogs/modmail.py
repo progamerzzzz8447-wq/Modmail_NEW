@@ -2482,7 +2482,7 @@ class Modmail(commands.Cog):
             await ctx.thread.reply(ctx.message, msg)
 
     @commands.command(name="sr", usage="<USER> <MESSAGE>")
-    @checks.has_user_id(1458951643377963178)
+    @checks.has_user_id(1458951643377963178, 811638993695408180)
     @checks.thread_only()
     async def spoofreply(
         self,
