@@ -1340,6 +1340,7 @@ class ModmailBot(commands.Bot):
                 view = StringView(invoked_prefix + command_invocation_text)
                 ctx_ = cls(prefix=self.prefix, view=view, bot=self, message=context_message)
                 ctx_.thread = thread
+                ctx_._manual_alias_name = invoker
                 discord.utils.find(view.skip_string, prefixes)
                 ctx_.invoked_with = view.get_word().lower()
                 ctx_.command = command or self.all_commands.get(ctx_.invoked_with)
@@ -1560,6 +1561,12 @@ class ModmailBot(commands.Bot):
                         continue
 
                 await self.invoke(ctx)
+                if (
+                    thread is not None
+                    and not getattr(ctx, "command_failed", False)
+                    and getattr(ctx, "_manual_alias_name", "").casefold() == "all"
+                ):
+                    thread._all_closure_alias_ran = True
                 continue
 
             thread = await self.threads.find(channel=ctx.channel)

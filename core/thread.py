@@ -140,6 +140,7 @@ class Thread:
         self._abuse_close_lock = asyncio.Lock()
         self._auto_close_check_active = False
         self._auto_close_check_message = None
+        self._all_closure_alias_ran = False
         # --- SNOOZE STATE ---
         self.snoozed = False  # True if thread is snoozed
         self.snooze_data = None  # Dict with channel/category/position/messages for restoration

@@ -132,7 +132,10 @@ class Modmail(commands.Cog):
                 thread._pending_followup_message = message
             return
 
-        if is_acknowledgement_only(build_ticket_text(message)):
+        if (
+            getattr(thread, "_all_closure_alias_ran", False)
+            and is_acknowledgement_only(build_ticket_text(message))
+        ):
             try:
                 await thread.begin_acknowledgement_closure_workflow(message)
             except Exception:
@@ -3101,6 +3104,7 @@ class Modmail(commands.Cog):
             )
 
         if delivered and not staff_only:
+            ctx.thread._all_closure_alias_ran = True
             await self._resolve_aiall_thread(ctx)
 
     @commands.command()
