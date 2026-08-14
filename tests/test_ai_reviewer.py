@@ -232,6 +232,18 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             "Okay, I need to appeal.",
             "nope that is all for today",
             "tysm, that's all",
+            "nothing",
+            "Nothing else, thank you",
+            "nah that's everything",
+            "No further questions from me",
+            "I'm good now, cheers",
+            "That answers everything",
+            "All sorted now",
+            "Much appreciated, that will be all",
+            "close",
+            "Please close the ticket",
+            "You can close this now",
+            "Resolved, feel free to close",
         ):
             with self.subTest(message=message):
                 self.assertTrue(is_acknowledgement_only(message))
