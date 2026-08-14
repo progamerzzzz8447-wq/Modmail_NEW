@@ -346,10 +346,23 @@ def recipient_username_form_fills(
         )
         words = set(normalized_label.split())
         if (
-            "username" in words and "your" in words and "their" not in words
+            "username" in words
+            and "discord" in words
+            and "your" in words
+            and "their" not in words
         ) or normalized_label == "discord username":
             fills[str(field.get("field_id") or "")] = username
     return {field_id: value for field_id, value in fills.items() if field_id}
+
+
+def recipient_evidence_from_transcript(transcript: str) -> str:
+    """Return only recipient-authored block contents from a labelled ticket transcript."""
+    contents = []
+    for block in re.split(r"\n\n---\n\n", str(transcript or "")):
+        heading, separator, content = block.partition("\n")
+        if separator and "RECIPIENT MESSAGE" in heading.upper():
+            contents.append(content)
+    return "\n".join(contents)
 
 
 def find_command_references(text: str, *, prefix: str = "?") -> typing.Set[str]:
@@ -1095,12 +1108,27 @@ class GeminiAutoReplyReviewer:
         valid_form_ids = {
             field["field_id"] for field in extract_blank_form_fields(choices[selected])
         }
+        selected_form_labels = {
+            field["field_id"]: field["label"]
+            for field in extract_blank_form_fields(choices[selected])
+        }
+        recipient_evidence = "\n".join(
+            [ticket_text]
+            + [
+                message["message"]
+                for message in context_messages
+                if message["speaker"] == "recipient"
+            ]
+        ).casefold()
         self.last_form_fills = {}
         for item in parsed_output.get("form_fills") or []:
             if not isinstance(item, typing.Mapping):
                 continue
             field_id = str(item.get("field_id") or "").strip()
             value = " ".join(str(item.get("value") or "").split())[:300]
+            label = selected_form_labels.get(field_id, "").casefold()
+            if "username" in label and value.casefold() not in recipient_evidence:
+                continue
             if field_id in valid_form_ids and value and field_id not in self.last_form_fills:
                 self.last_form_fills[field_id] = value
 
@@ -1373,12 +1401,23 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
                 str(field.get("field_id") or "")
                 for field in form_catalog.get(selected_autoreply, [])
             }
+            selected_form_labels = {
+                str(field.get("field_id") or ""): str(field.get("label") or "")
+                for field in form_catalog.get(selected_autoreply, [])
+            }
             form_fills = {}
             for item in result.get("form_fills") or []:
                 if not isinstance(item, typing.Mapping):
                     continue
                 field_id = str(item.get("field_id") or "").strip()
                 value = " ".join(str(item.get("value") or "").split())[:300]
+                label = selected_form_labels.get(field_id, "").casefold()
+                if (
+                    "username" in label
+                    and value.casefold()
+                    not in recipient_evidence_from_transcript(transcript).casefold()
+                ):
+                    continue
                 if field_id in valid_form_ids and value and field_id not in form_fills:
                     form_fills[field_id] = value
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):

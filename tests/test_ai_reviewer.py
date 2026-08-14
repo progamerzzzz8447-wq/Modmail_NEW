@@ -44,6 +44,7 @@ from core.ai_reviewer import (
     last_relayed_message_is_human_staff,
     parse_aireply_argument,
     recipient_username_form_fills,
+    recipient_evidence_from_transcript,
     resolve_ai_autoreply_type,
 )
 
@@ -135,11 +136,23 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             {"field_id": "field_2", "label": "DISCORD USERNAME"},
             {"field_id": "field_3", "label": "THEIR DISCORD USERNAME"},
             {"field_id": "field_4", "label": "ROBLOX USERNAME"},
+            {"field_id": "field_5", "label": "YOUR ROBLOX USERNAME"},
         ]
         self.assertEqual(
             recipient_username_form_fills(fields, "ticket_writer"),
             {"field_1": "ticket_writer", "field_2": "ticket_writer"},
         )
+
+    def test_username_evidence_ignores_staff_and_ai_messages(self):
+        transcript = (
+            "[RECIPIENT MESSAGE]\nMy Roblox username is ActualRoblox\n\n---\n\n"
+            "[STAFF MESSAGE]\nMaybe their username is WrongName\n\n---\n\n"
+            "[BOT OR AI MESSAGE]\nDISCORD USERNAME: BotGuess"
+        )
+        evidence = recipient_evidence_from_transcript(transcript)
+        self.assertIn("ActualRoblox", evidence)
+        self.assertNotIn("WrongName", evidence)
+        self.assertNotIn("BotGuess", evidence)
 
     def test_plain_uppercase_form_run_is_detected_when_fences_are_missing(self):
         alias = (

@@ -1843,6 +1843,45 @@ class Thread:
         if not fields:
             return response_text, None
         recipient_username = str(getattr(self.recipient, "name", "") or "").strip()
+        source_author = getattr(source_message, "author", None)
+        if (
+            not recipient_username
+            and getattr(source_author, "id", None) == self.id
+        ):
+            recipient_username = str(getattr(source_author, "name", "") or "").strip()
+        if not recipient_username:
+            cached_recipient = self.bot.get_user(self.id)
+            recipient_username = str(
+                getattr(cached_recipient, "name", "") or ""
+            ).strip()
+        if not recipient_username:
+            try:
+                fetched_recipient = await self.bot.get_or_fetch_user(self.id)
+            except Exception:
+                logger.warning(
+                    "Could not resolve the recipient username for form autofill.",
+                    exc_info=True,
+                )
+            else:
+                recipient_username = str(
+                    getattr(fetched_recipient, "name", "") or ""
+                ).strip()
+                if fetched_recipient is not None and self._recipient is None:
+                    self._recipient = fetched_recipient
+        if not recipient_username:
+            try:
+                username_log = await self.bot.api.get_log(self.channel.id)
+                recipient_data = (username_log or {}).get("recipient") or {}
+                recipient_username = str(
+                    recipient_data.get("name")
+                    or recipient_data.get("username")
+                    or ""
+                ).strip()
+            except Exception:
+                logger.warning(
+                    "Could not load the stored recipient username for form autofill.",
+                    exc_info=True,
+                )
         trusted_fills = recipient_username_form_fills(fields, recipient_username)
         if form_fills is not None:
             combined_fills = dict(trusted_fills)
