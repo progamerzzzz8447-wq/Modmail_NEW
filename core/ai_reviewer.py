@@ -233,7 +233,7 @@ def is_acknowledgement_only(text: str) -> bool:
 
 
 def extract_blank_form_fields(text: str) -> typing.List[typing.Dict[str, str]]:
-    """Extract blank ``LABEL:`` fields located inside fenced alias text."""
+    """Expose every non-empty fenced form line for Gemini to interpret semantically."""
     fields = []
     in_fence = False
     for line in str(text or "").splitlines():
@@ -242,10 +242,11 @@ def extract_blank_form_fields(text: str) -> typing.List[typing.Dict[str, str]]:
             continue
         if not in_fence:
             continue
-        match = re.match(r"^\s*(\*\*)?(.+?)([:?])(\*\*)?\s*$", line)
-        if match is None or bool(match.group(1)) != bool(match.group(4)):
-            continue
-        label = match.group(2).strip() + ("?" if match.group(3) == "?" else "")
+        label = line.strip()
+        if label.startswith("**") and label.endswith("**") and len(label) > 4:
+            label = label[2:-2].strip()
+        if label.endswith(":"):
+            label = label[:-1].rstrip()
         if not label:
             continue
         fields.append({"field_id": f"field_{len(fields) + 1}", "label": label})
@@ -274,15 +275,19 @@ def apply_form_autofills(text: str, fills: typing.Mapping[str, str]) -> str:
             continue
         body = line.rstrip("\r\n")
         newline = line[len(body) :]
-        match = re.match(r"^(\s*)(\*\*)?(.+?)([:?])(\*\*)?\s*$", body)
-        if match is None or bool(match.group(2)) != bool(match.group(5)):
+        if not body.strip():
             continue
         field_index += 1
         value = cleaned_fills.get(f"field_{field_index}")
         if value is None:
             continue
-        indent, bold = match.group(1), match.group(2)
-        label = match.group(3).strip() + ("?" if match.group(4) == "?" else "")
+        indent = body[: len(body) - len(body.lstrip())]
+        label = body.strip()
+        bold = label.startswith("**") and label.endswith("**") and len(label) > 4
+        if bold:
+            label = label[2:-2].strip()
+        if label.endswith(":"):
+            label = label[:-1].rstrip()
         if bold:
             lines[index] = f"{indent}**{label} (A):** {value}{newline}"
         else:
@@ -789,6 +794,7 @@ class GeminiAutoReplyReviewer:
         self.timeout = timeout_seconds
         self.last_outcome = "not_run"
         self.last_detail = None
+        self.last_form_fills = {}
 
     @staticmethod
     def _extract_output_text(data: typing.Mapping[str, typing.Any]) -> typing.Optional[str]:
@@ -910,6 +916,7 @@ class GeminiAutoReplyReviewer:
                     "name": key,
                     "alias": alias_names.get(key, ""),
                     "set_message": choices[key],
+                    "form_lines": extract_blank_form_fields(choices[key]),
                     "additional_info": selection_guidance.get(key, ""),
                 }
                 for key in keys
@@ -953,7 +960,11 @@ class GeminiAutoReplyReviewer:
             "unsupported assumptions. Useful extra context is allowed when it remains relevant "
             "and does not obscure or contradict the direct answer. "
             f"Select {NO_MATCH} when no autoreply is relevant or the match is uncertain. "
-            "Never write a reply or invent a category.\n\n"
+            "If the selected autoreply has `form_lines`, use this same request to identify lines "
+            "that are form fields already answered explicitly by the recipient. A field line does "
+            "not need a colon or question mark. Return its supplied field_id and value in "
+            "`form_fills`. Do not fill prose, instructions, already-completed lines, or ambiguous "
+            "information, and never guess. Never write a reply or invent a category.\n\n"
             + json.dumps(review_input, ensure_ascii=False)
         )
         response_schema = {
@@ -962,7 +973,18 @@ class GeminiAutoReplyReviewer:
                 "autoreply_key": {
                     "type": "STRING",
                     "enum": [NO_MATCH, *keys],
-                }
+                },
+                "form_fills": {
+                    "type": "ARRAY",
+                    "items": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "field_id": {"type": "STRING"},
+                            "value": {"type": "STRING"},
+                        },
+                        "required": ["field_id", "value"],
+                    },
+                },
             },
             "required": ["autoreply_key"],
         }
@@ -1024,7 +1046,8 @@ class GeminiAutoReplyReviewer:
             return None
 
         try:
-            selected = json.loads(output_text)["autoreply_key"]
+            parsed_output = json.loads(output_text)
+            selected = parsed_output["autoreply_key"]
         except (json.JSONDecodeError, KeyError, TypeError):
             self.last_outcome = "invalid_response"
             self.last_detail = "Gemini returned invalid structured output."
@@ -1043,6 +1066,18 @@ class GeminiAutoReplyReviewer:
             self.last_outcome = "invalid_response"
             self.last_detail = "Gemini selected an unknown autoreply."
             return None
+
+        valid_form_ids = {
+            field["field_id"] for field in extract_blank_form_fields(choices[selected])
+        }
+        self.last_form_fills = {}
+        for item in parsed_output.get("form_fills") or []:
+            if not isinstance(item, typing.Mapping):
+                continue
+            field_id = str(item.get("field_id") or "").strip()
+            value = " ".join(str(item.get("value") or "").split())[:300]
+            if field_id in valid_form_ids and value and field_id not in self.last_form_fills:
+                self.last_form_fills[field_id] = value
 
         self.last_outcome = "matched"
         self.last_detail = f"Selected autoreply: {selected}."
@@ -1159,6 +1194,9 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
         autoreply_sent: bool,
         questions_asked: int = 0,
         autoreply_catalog: typing.Optional[typing.Mapping[str, str]] = None,
+        autoreply_forms: typing.Optional[
+            typing.Mapping[str, typing.Sequence[typing.Mapping[str, str]]]
+        ] = None,
     ):
         if not str(transcript or "").strip():
             self.last_outcome = "skipped"
@@ -1170,6 +1208,11 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             if str(name).strip()
         }
         catalog_text = json.dumps(catalog, ensure_ascii=False, indent=2)
+        form_catalog = {
+            name: list((autoreply_forms or {}).get(name) or [])
+            for name in catalog
+            if (autoreply_forms or {}).get(name)
+        }
         selection_names = [NO_MATCH, *catalog]
         prompt = (
             "Assess this TUI Airways Roblox/Discord support ticket during automatic intake. "
@@ -1211,11 +1254,16 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             "acknowledgement, confirmation, or conversational closing, select no autoreply; never "
             "reinterpret an older issue to select a different related autoreply. A shared subject or "
             "vague similarity is not enough. Otherwise select "
-            f"`{NO_MATCH}`. Never expose alias identifiers to the recipient. Return structured JSON "
+            f"`{NO_MATCH}`. If the selected autoreply has form lines below, use this same response "
+            "to return field_id/value pairs for lines that are actual blank fields already answered "
+            "explicitly by the recipient. Lines need no punctuation. Do not fill instructions or "
+            "guess. Never expose alias identifiers to the recipient. Return structured JSON "
             "only.\n\n"
             f"AUTOREPLY SENT: {bool(autoreply_sent)}\n"
             f"CLARIFICATION QUESTIONS ALREADY ASKED: {max(int(questions_asked), 0)}\n\n"
             f"AUTOREPLY CATALOGUE (DISPLAY NAME -> ALIAS IDENTIFIER):\n{catalog_text}\n\n"
+            f"FENCED FORM LINES ONLY:\n"
+            f"{json.dumps(form_catalog, ensure_ascii=False, indent=2)}\n\n"
             f"TRANSCRIPT:\n{transcript}"
         )
         schema = {
@@ -1228,6 +1276,17 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
                 "ticket_summary": {"type": "STRING"},
                 "primary_question": {"type": "STRING"},
                 "selected_autoreply": {"type": "STRING", "enum": selection_names},
+                "form_fills": {
+                    "type": "ARRAY",
+                    "items": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "field_id": {"type": "STRING"},
+                            "value": {"type": "STRING"},
+                        },
+                        "required": ["field_id", "value"],
+                    },
+                },
             },
             "required": [
                 "clear",
@@ -1284,6 +1343,18 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             selected_autoreply = str(result["selected_autoreply"] or "").strip()
             if selected_autoreply not in selection_names:
                 raise ValueError("Gemini selected an unknown intake autoreply.")
+            valid_form_ids = {
+                str(field.get("field_id") or "")
+                for field in form_catalog.get(selected_autoreply, [])
+            }
+            form_fills = {}
+            for item in result.get("form_fills") or []:
+                if not isinstance(item, typing.Mapping):
+                    continue
+                field_id = str(item.get("field_id") or "").strip()
+                value = " ".join(str(item.get("value") or "").split())[:300]
+                if field_id in valid_form_ids and value and field_id not in form_fills:
+                    form_fills[field_id] = value
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             self.last_outcome = "invalid_response"
             self.last_detail = "Gemini returned an invalid intake assessment."
@@ -1300,6 +1371,7 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             "selected_autoreply": (
                 None if selected_autoreply == NO_MATCH else selected_autoreply
             ),
+            "form_fills": form_fills,
         }
 
 

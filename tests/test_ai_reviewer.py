@@ -89,7 +89,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         alias = (
             "Please complete this report form.\n\n"
             "```\nROBLOX USERNAME:\n**YOUR DISCORD USERNAME:**\n"
-            "THEIR DISCORD USERNAME:\nWhat did you purchase?\nWhat issue occurred?\n"
+            "THEIR DISCORD USERNAME:\nWhat did you purchase\nWhat issue occurred\n"
             "```\n\nAttach evidence if available."
         )
         fields = extract_blank_form_fields(alias)
@@ -99,8 +99,8 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
                 {"field_id": "field_1", "label": "ROBLOX USERNAME"},
                 {"field_id": "field_2", "label": "YOUR DISCORD USERNAME"},
                 {"field_id": "field_3", "label": "THEIR DISCORD USERNAME"},
-                {"field_id": "field_4", "label": "What did you purchase?"},
-                {"field_id": "field_5", "label": "What issue occurred?"},
+                {"field_id": "field_4", "label": "What did you purchase"},
+                {"field_id": "field_5", "label": "What issue occurred"},
             ],
         )
         rendered = apply_form_autofills(
@@ -122,9 +122,9 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ROBLOX USERNAME (A): 1231431421", rendered)
         self.assertIn("**YOUR DISCORD USERNAME (A):** recipient_name", rendered)
         self.assertIn("THEIR DISCORD USERNAME:\n", rendered)
-        self.assertIn("What did you purchase? (A): Comfort seat upgrade", rendered)
+        self.assertIn("What did you purchase (A): Comfort seat upgrade", rendered)
         self.assertIn(
-            "What issue occurred? (A): Unknown error while using the upgrade",
+            "What issue occurred (A): Unknown error while using the upgrade",
             rendered,
         )
         self.assertTrue(rendered.endswith("Attach evidence if available."))
@@ -288,6 +288,9 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
                         "ticket_summary": "Recipient is asking about a gamepass payment.",
                         "primary_question": "When will the gamepass payment arrive?",
                         "selected_autoreply": "Payment timing",
+                        "form_fills": [
+                            {"field_id": "field_1", "value": "Comfort seat upgrade"}
+                        ],
                     }
                 ),
             )
@@ -299,6 +302,11 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             autoreply_sent=True,
             questions_asked=3,
             autoreply_catalog={"Payment timing": "payment-alias"},
+            autoreply_forms={
+                "Payment timing": [
+                    {"field_id": "field_1", "label": "What did you purchase"}
+                ]
+            },
         )
 
         self.assertTrue(result["clear"])
@@ -307,6 +315,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["ticket_summary"], "Recipient is asking about a gamepass payment.")
         self.assertEqual(result["primary_question"], "When will the gamepass payment arrive?")
         self.assertEqual(result["selected_autoreply"], "Payment timing")
+        self.assertEqual(result["form_fills"], {"field_1": "Comfort seat upgrade"})
         self.assertEqual(session.calls, 1)
         config = session.request[1]["json"]["generationConfig"]
         self.assertEqual(config["thinkingConfig"], {"thinkingLevel": "minimal"})

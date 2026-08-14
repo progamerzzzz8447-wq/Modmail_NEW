@@ -1222,6 +1222,11 @@ class Thread:
             name: (alias_actions.get(name) or {}).get("alias", "") or name
             for name in autoreplies
         }
+        autoreply_forms = {
+            name: extract_blank_form_fields(response)
+            for name, response in autoreplies.items()
+            if extract_blank_form_fields(response)
+        }
         assessor = GeminiIntakeAssessment(
             self.bot.session,
             str(api_key),
@@ -1232,6 +1237,7 @@ class Thread:
             autoreply_sent=self._opening_autoreply_sent,
             questions_asked=intake_questions_asked,
             autoreply_catalog=autoreply_catalog,
+            autoreply_forms=autoreply_forms,
         )
         # A newer recipient message arrived while Gemini was assessing this batch. Its debounced
         # workflow owns the next response, so this stale result must never send a clarification.
@@ -1276,7 +1282,12 @@ class Thread:
                             autoreplies[selected_autoreply],
                         )
                     else:
-                        await self._execute_ai_alias(selected_autoreply, alias_action, message)
+                        await self._execute_ai_alias(
+                            selected_autoreply,
+                            alias_action,
+                            message,
+                            form_fills=result["form_fills"],
+                        )
                     self._opening_autoreply_sent = True
                     actual_subscribers = self.bot.config["subscriptions"].get(str(self.id), [])
                     self._opening_alias_subscribed = bool(
@@ -1770,7 +1781,14 @@ class Thread:
         ctx.command.checks = [checks.has_permissions_predicate(PermissionLevel.INVALID)]
         await ctx.command.invoke(ctx)
 
-    async def _execute_ai_alias(self, display_name: str, alias_action, source_message) -> None:
+    async def _execute_ai_alias(
+        self,
+        display_name: str,
+        alias_action,
+        source_message,
+        *,
+        form_fills: typing.Optional[typing.Mapping[str, str]] = None,
+    ) -> None:
         """Execute every alias step in order while preserving the AI footer on replies."""
         action_errors = []
         for step in alias_action["steps"]:
@@ -1790,6 +1808,7 @@ class Thread:
                     response_text = await self._autofill_alias_form(
                         response_text,
                         source_message,
+                        form_fills=form_fills,
                     )
 
                     await self._send_ai_autoreply(display_name, response_text)
@@ -1807,13 +1826,23 @@ class Thread:
                 + "; ".join(action_errors)
             )
 
-    async def _autofill_alias_form(self, response_text: str, source_message) -> str:
+    async def _autofill_alias_form(
+        self,
+        response_text: str,
+        source_message,
+        *,
+        form_fills: typing.Optional[typing.Mapping[str, str]] = None,
+    ) -> str:
         """Auto-fill blank fenced form fields from explicit recipient ticket context."""
         fields = extract_blank_form_fields(response_text)
         if not fields:
             return response_text
         recipient_username = str(getattr(self.recipient, "name", "") or "").strip()
         trusted_fills = recipient_username_form_fills(fields, recipient_username)
+        if form_fills is not None:
+            combined_fills = dict(trusted_fills)
+            combined_fills.update(form_fills)
+            return apply_form_autofills(response_text, combined_fills)
 
         remaining_fields = [
             field for field in fields if field["field_id"] not in trusted_fills
@@ -2008,7 +2037,12 @@ class Thread:
                 if alias_action is None:
                     await self._send_ai_autoreply(selected, response_text)
                 else:
-                    await self._execute_ai_alias(selected, alias_action, message)
+                    await self._execute_ai_alias(
+                        selected,
+                        alias_action,
+                        message,
+                        form_fills=reviewer.last_form_fills,
+                    )
                 self._opening_autoreply_sent = True
                 actual_subscribers = self.bot.config["subscriptions"].get(str(self.id), [])
                 self._opening_alias_subscribed = bool(
