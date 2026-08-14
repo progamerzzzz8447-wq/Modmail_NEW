@@ -355,6 +355,50 @@ def recipient_username_form_fills(
     return {field_id: value for field_id, value in fills.items() if field_id}
 
 
+def enforce_recipient_discord_username(text: str, recipient_username: str) -> str:
+    """Fill blank Discord-username labels directly, independent of Gemini field IDs."""
+    username = str(recipient_username or "").strip()
+    if not username:
+        return str(text or "")
+    lines = str(text or "").splitlines(keepends=True)
+    changed = False
+    first_changed = None
+    for index, line in enumerate(lines):
+        body = line.rstrip("\r\n")
+        newline = line[len(body) :]
+        normalized = " ".join(
+            re.sub(r"[^a-z0-9]+", " ", body.casefold()).split()
+        )
+        if normalized not in {"discord username", "your discord username"}:
+            continue
+        indent = body[: len(body) - len(body.lstrip())]
+        stripped = body.strip().strip("\u200b")
+        bold = stripped.startswith("**") and stripped.endswith("**")
+        label = stripped.strip("*`").strip()
+        if label.endswith(":"):
+            label = label[:-1].rstrip()
+        lines[index] = (
+            f"{indent}**{label} (A):** {username}{newline}"
+            if bold
+            else f"{indent}{label} (A): {username}{newline}"
+        )
+        changed = True
+        first_changed = index if first_changed is None else first_changed
+    if not changed:
+        return str(text or "")
+    rendered = "".join(lines)
+    if FORM_AUTOFILL_NOTICE in rendered:
+        return rendered
+    fence_index = rendered.find("```")
+    if fence_index >= 0:
+        before, after = rendered[:fence_index], rendered[fence_index:]
+        if before and not before.endswith("\n\n"):
+            before = before.rstrip("\r\n") + "\n\n"
+        return f"{before}{FORM_AUTOFILL_NOTICE}\n\n{after}"
+    lines.insert(first_changed, FORM_AUTOFILL_NOTICE + "\n\n")
+    return "".join(lines)
+
+
 def recipient_evidence_from_transcript(transcript: str) -> str:
     """Return only recipient-authored block contents from a labelled ticket transcript."""
     contents = []

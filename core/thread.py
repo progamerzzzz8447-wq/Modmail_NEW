@@ -40,6 +40,7 @@ from core.ai_reviewer import (
     build_ticket_text,
     describe_ai_error,
     extract_blank_form_fields,
+    enforce_recipient_discord_username,
     generate_ai_message_joint_id,
     has_application_trigger,
     has_configured_trigger,
@@ -1883,22 +1884,27 @@ class Thread:
                     exc_info=True,
                 )
         trusted_fills = recipient_username_form_fills(fields, recipient_username)
+
+        def render_fills(fills):
+            rendered = apply_form_autofills(response_text, fills)
+            return enforce_recipient_discord_username(rendered, recipient_username)
+
         if form_fills is not None:
             combined_fills = dict(trusted_fills)
             combined_fills.update(form_fills)
             if not combined_fills:
                 return response_text, "No fields filled: No relevant information provided."
-            return apply_form_autofills(response_text, combined_fills), None
+            return render_fills(combined_fills), None
 
         remaining_fields = [
             field for field in fields if field["field_id"] not in trusted_fills
         ]
         if not remaining_fields:
-            return apply_form_autofills(response_text, trusted_fills), None
+            return render_fills(trusted_fills), None
         api_key = self.bot.config.get("gemini_api_key", convert=False)
         if not api_key or self.bot.session is None:
             if trusted_fills:
-                return apply_form_autofills(response_text, trusted_fills), None
+                return render_fills(trusted_fills), None
             return response_text, "No fields filled: Gemini is unavailable."
         try:
             log_entry = await self.bot.api.get_log(self.channel.id)
@@ -1914,7 +1920,7 @@ class Thread:
         except Exception:
             logger.warning("Could not build alias form-autofill context.", exc_info=True)
             if trusted_fills:
-                return apply_form_autofills(response_text, trusted_fills), None
+                return render_fills(trusted_fills), None
             return response_text, "No fields filled: Ticket context could not be loaded."
 
         reviewer = GeminiFormAutofill(
@@ -1926,7 +1932,7 @@ class Thread:
         combined_fills = dict(trusted_fills)
         combined_fills.update(fills or {})
         if combined_fills:
-            return apply_form_autofills(response_text, combined_fills), None
+            return render_fills(combined_fills), None
         if fills is None:
             return response_text, "No fields filled: Gemini form checking failed."
         return response_text, "No fields filled: No relevant information provided."

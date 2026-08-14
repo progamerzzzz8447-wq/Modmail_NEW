@@ -31,6 +31,7 @@ from core.ai_reviewer import (
     describe_ai_error,
     decode_ai_text_attachment,
     extract_blank_form_fields,
+    enforce_recipient_discord_username,
     finalize_generated_ai_reply,
     find_command_references,
     generate_ai_message_joint_id,
@@ -142,6 +143,13 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             recipient_username_form_fills(fields, "ticket_writer"),
             {"field_1": "ticket_writer", "field_2": "ticket_writer"},
         )
+        rendered = enforce_recipient_discord_username(
+            "Intro\n\nDISCORD USERNAME\nROBLOX USERNAME\nROLE APPLIED FOR\n",
+            "ticket_writer",
+        )
+        self.assertIn("DISCORD USERNAME (A): ticket_writer", rendered)
+        self.assertIn("ROBLOX USERNAME\n", rendered)
+        self.assertIn(FORM_AUTOFILL_NOTICE, rendered)
 
     def test_username_evidence_ignores_staff_and_ai_messages(self):
         transcript = (
