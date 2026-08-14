@@ -1805,13 +1805,18 @@ class Thread:
                             author=self.bot.user,
                         )
 
-                    response_text = await self._autofill_alias_form(
+                    response_text, no_fill_reason = await self._autofill_alias_form(
                         response_text,
                         source_message,
                         form_fills=form_fills,
                     )
 
                     await self._send_ai_autoreply(display_name, response_text)
+                    if no_fill_reason:
+                        await self.channel.send(
+                            no_fill_reason,
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
                     continue
                 await self._invoke_ai_alias_step(step, source_message)
             except Exception as exc:
@@ -1832,26 +1837,30 @@ class Thread:
         source_message,
         *,
         form_fills: typing.Optional[typing.Mapping[str, str]] = None,
-    ) -> str:
+    ) -> typing.Tuple[str, typing.Optional[str]]:
         """Auto-fill blank fenced form fields from explicit recipient ticket context."""
         fields = extract_blank_form_fields(response_text)
         if not fields:
-            return response_text
+            return response_text, None
         recipient_username = str(getattr(self.recipient, "name", "") or "").strip()
         trusted_fills = recipient_username_form_fills(fields, recipient_username)
         if form_fills is not None:
             combined_fills = dict(trusted_fills)
             combined_fills.update(form_fills)
-            return apply_form_autofills(response_text, combined_fills)
+            if not combined_fills:
+                return response_text, "No fields filled: No relevant information provided."
+            return apply_form_autofills(response_text, combined_fills), None
 
         remaining_fields = [
             field for field in fields if field["field_id"] not in trusted_fills
         ]
         if not remaining_fields:
-            return apply_form_autofills(response_text, trusted_fills)
+            return apply_form_autofills(response_text, trusted_fills), None
         api_key = self.bot.config.get("gemini_api_key", convert=False)
         if not api_key or self.bot.session is None:
-            return apply_form_autofills(response_text, trusted_fills)
+            if trusted_fills:
+                return apply_form_autofills(response_text, trusted_fills), None
+            return response_text, "No fields filled: Gemini is unavailable."
         try:
             log_entry = await self.bot.api.get_log(self.channel.id)
             from core.ai_sorter import build_sorting_transcript
@@ -1865,7 +1874,9 @@ class Thread:
                 transcript += "\n\n---\n\n[CURRENT RECIPIENT MESSAGE]\n" + current_text
         except Exception:
             logger.warning("Could not build alias form-autofill context.", exc_info=True)
-            return response_text
+            if trusted_fills:
+                return apply_form_autofills(response_text, trusted_fills), None
+            return response_text, "No fields filled: Ticket context could not be loaded."
 
         reviewer = GeminiFormAutofill(
             self.bot.session,
@@ -1875,7 +1886,11 @@ class Thread:
         fills = await reviewer.identify_fills(transcript, remaining_fields)
         combined_fills = dict(trusted_fills)
         combined_fills.update(fills or {})
-        return apply_form_autofills(response_text, combined_fills)
+        if combined_fills:
+            return apply_form_autofills(response_text, combined_fills), None
+        if fills is None:
+            return response_text, "No fields filled: Gemini form checking failed."
+        return response_text, "No fields filled: No relevant information provided."
 
     async def _run_ai_review(self, message, ticket_text: str) -> None:
         """Run Gemini for one qualifying recipient message, failing open on every error."""
