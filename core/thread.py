@@ -138,6 +138,8 @@ class Thread:
         self._followup_messages = []
         self._ai_review_lock = asyncio.Lock()
         self._abuse_close_lock = asyncio.Lock()
+        self._auto_close_check_active = False
+        self._auto_close_check_message = None
         # --- SNOOZE STATE ---
         self.snoozed = False  # True if thread is snoozed
         self.snooze_data = None  # Dict with channel/category/position/messages for restoration
@@ -1517,54 +1519,76 @@ class Thread:
                 str(api_key),
                 model=AI_INTAKE_MODEL,
             )
-            result = await assessor.assess(
-                transcript,
-                autoreply_sent=True,
-                questions_asked=questions_asked,
-                autoreply_catalog={},
-            )
-            if result is None or revision != self._followup_revision:
-                return
-
-            outstanding = [
-                inquiry.strip()
-                for inquiry in result["remaining_inquiries"]
-                if inquiry.strip()
-            ]
-            if outstanding or not result["resolved"]:
-                question = "; ".join(outstanding) or result["primary_question"]
-                mentions = " ".join(
-                    dict.fromkeys(self.bot.config["subscriptions"].get(str(self.id), []))
+            auto_closed = False
+            self._auto_close_check_active = True
+            try:
+                self._auto_close_check_message = await self.channel.send(
+                    "**DO NOT CLOSE - AUTO CHECKING**",
+                    allowed_mentions=discord.AllowedMentions.none(),
                 )
-                prefix = f"{mentions} " if mentions else ""
-                await self.channel.send(
-                    f"{prefix}**Reply requested — outstanding question:** "
-                    f"{question or 'The recipient still requires assistance.'}"
+                result = await assessor.assess(
+                    transcript,
+                    autoreply_sent=True,
+                    questions_asked=questions_asked,
+                    autoreply_catalog={},
+                )
+                if result is None or revision != self._followup_revision:
+                    return
+
+                outstanding = [
+                    inquiry.strip()
+                    for inquiry in result["remaining_inquiries"]
+                    if inquiry.strip()
+                ]
+                if outstanding or not result["resolved"]:
+                    question = "; ".join(outstanding) or result["primary_question"]
+                    mentions = " ".join(
+                        dict.fromkeys(self.bot.config["subscriptions"].get(str(self.id), []))
+                    )
+                    prefix = f"{mentions} " if mentions else ""
+                    await self.channel.send(
+                        f"{prefix}**Reply requested — outstanding question:** "
+                        f"{question or 'The recipient still requires assistance.'}"
+                    )
+                    await self._log_ai_check(
+                        message,
+                        current_text,
+                        outcome="needs_follow_up",
+                        detail=f"Acknowledgement received with an outstanding inquiry: {question}",
+                        selected_name="acknowledgement resolution check",
+                        delivery_status="Subscribed users were pinged again; ticket remains open.",
+                    )
+                    return
+
+                await self._send_ai_autoreply(
+                    "Automatic AI ticket closure",
+                    AI_TICKET_CLOSED_MESSAGE,
                 )
                 await self._log_ai_check(
                     message,
                     current_text,
-                    outcome="needs_follow_up",
-                    detail=f"Acknowledgement received with an outstanding inquiry: {question}",
-                    selected_name="acknowledgement resolution check",
-                    delivery_status="Subscribed users were pinged again; ticket remains open.",
+                    outcome="resolved",
+                    detail="Acknowledgement received and no unanswered inquiry remained.",
+                    selected_name="automatic aibye",
+                    response_text=AI_TICKET_CLOSED_MESSAGE,
+                    delivery_status="Automatic AI closure delivered and ticket closed.",
                 )
-                return
-
-            await self._send_ai_autoreply(
-                "Automatic AI ticket closure",
-                AI_TICKET_CLOSED_MESSAGE,
-            )
-            await self._log_ai_check(
-                message,
-                current_text,
-                outcome="resolved",
-                detail="Acknowledgement received and no unanswered inquiry remained.",
-                selected_name="automatic aibye",
-                response_text=AI_TICKET_CLOSED_MESSAGE,
-                delivery_status="Automatic AI closure delivered and ticket closed.",
-            )
-            await self.close(closer=self.bot.user)
+                await self.close(closer=self.bot.user)
+                auto_closed = True
+            finally:
+                self._auto_close_check_active = False
+                marker = self._auto_close_check_message
+                self._auto_close_check_message = None
+                if not auto_closed and marker is not None:
+                    try:
+                        await marker.delete()
+                    except (discord.NotFound, discord.Forbidden):
+                        pass
+                    except Exception:
+                        logger.warning(
+                            "Could not delete the automatic close-check marker.",
+                            exc_info=True,
+                        )
 
     async def _run_roblox_game_pass_autoreply(self, message, ticket_text: str) -> None:
         """Send the fixed game-pass guidance once per ticket without calling Gemini."""
@@ -2444,6 +2468,14 @@ class Thread:
         auto_close: bool = False,
     ) -> None:
         """Close a thread now or after a set time in seconds"""
+
+        closer_id = getattr(closer, "id", None)
+        bot_user_id = getattr(self.bot.user, "id", None)
+        if self._auto_close_check_active and closer_id != bot_user_id:
+            raise CommandError(
+                "DO NOT CLOSE - AUTO CHECKING. The ticket may be closed manually once "
+                "the automatic check has finished."
+            )
 
         # restarts the after timer
         await self.cancel_closure(auto_close)
