@@ -141,6 +141,19 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             {"field_1": "ticket_writer", "field_2": "ticket_writer"},
         )
 
+    def test_plain_uppercase_form_run_is_detected_when_fences_are_missing(self):
+        alias = (
+            "To allow us to review your case, please provide:\n\n"
+            "DISCORD USERNAME\nDISCIPLINARY TYPE\nDISCIPLINARY REASON\n"
+            "REASON FOR APPEAL\nEVIDENCE, IF APPLICABLE\n\nPlease allow 48 hours."
+        )
+        fields = extract_blank_form_fields(alias)
+        self.assertEqual(len(fields), 5)
+        rendered = apply_form_autofills(alias, {"field_1": "ticket_writer"})
+        self.assertIn(FORM_AUTOFILL_NOTICE, rendered)
+        self.assertIn("DISCORD USERNAME (A): ticket_writer", rendered)
+        self.assertIn("Please allow 48 hours.", rendered)
+
     async def test_gemini_form_autofill_returns_only_structured_field_values(self):
         session = FakeSession(
             FakeResponse(

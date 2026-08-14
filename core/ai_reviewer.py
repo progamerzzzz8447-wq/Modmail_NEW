@@ -232,16 +232,46 @@ def is_acknowledgement_only(text: str) -> bool:
     return normalized in AI_ACKNOWLEDGEMENT_TRIGGERS
 
 
-def extract_blank_form_fields(text: str) -> typing.List[typing.Dict[str, str]]:
-    """Expose every non-empty fenced form line for Gemini to interpret semantically."""
-    fields = []
+def _form_line_indexes(text: str) -> typing.List[int]:
+    """Locate fenced form lines, or a safe fallback run of uppercase field labels."""
+    lines = str(text or "").splitlines()
+    indexes = []
     in_fence = False
-    for line in str(text or "").splitlines():
+    for index, line in enumerate(lines):
         if line.strip().startswith("```"):
             in_fence = not in_fence
             continue
-        if not in_fence:
+        if in_fence and line.strip():
+            indexes.append(index)
+    if indexes:
+        return indexes
+
+    runs = []
+    current = []
+    for index, line in enumerate(lines + [""]):
+        stripped = line.strip().strip("*")
+        is_candidate = bool(
+            stripped
+            and len(stripped) <= 80
+            and any(character.isalpha() for character in stripped)
+            and stripped.upper() == stripped
+            and not stripped.endswith(".")
+        )
+        if is_candidate:
+            current.append(index)
             continue
+        if len(current) >= 2:
+            runs.extend(current)
+        current = []
+    return runs
+
+
+def extract_blank_form_fields(text: str) -> typing.List[typing.Dict[str, str]]:
+    """Expose likely form lines for Gemini to interpret semantically."""
+    lines = str(text or "").splitlines()
+    fields = []
+    for index in _form_line_indexes(text):
+        line = lines[index]
         label = line.strip()
         if label.startswith("**") and label.endswith("**") and len(label) > 4:
             label = label[2:-2].strip()
@@ -264,20 +294,12 @@ def apply_form_autofills(text: str, fills: typing.Mapping[str, str]) -> str:
         return str(text or "")
 
     lines = str(text or "").splitlines(keepends=True)
-    in_fence = False
-    field_index = 0
+    candidate_indexes = _form_line_indexes(text)
     applied = False
-    for index, line in enumerate(lines):
-        if line.strip().startswith("```"):
-            in_fence = not in_fence
-            continue
-        if not in_fence:
-            continue
+    for field_index, index in enumerate(candidate_indexes, start=1):
+        line = lines[index]
         body = line.rstrip("\r\n")
         newline = line[len(body) :]
-        if not body.strip():
-            continue
-        field_index += 1
         value = cleaned_fills.get(f"field_{field_index}")
         if value is None:
             continue
@@ -299,7 +321,10 @@ def apply_form_autofills(text: str, fills: typing.Mapping[str, str]) -> str:
     rendered = "".join(lines)
     fence_index = rendered.find("```")
     if fence_index < 0:
-        return rendered
+        rendered_lines = rendered.splitlines(keepends=True)
+        first_index = candidate_indexes[0]
+        rendered_lines.insert(first_index, FORM_AUTOFILL_NOTICE + "\n\n")
+        return "".join(rendered_lines)
     before, after = rendered[:fence_index], rendered[fence_index:]
     if before and not before.endswith("\n\n"):
         before = before.rstrip("\r\n") + "\n\n"
@@ -986,7 +1011,7 @@ class GeminiAutoReplyReviewer:
                     },
                 },
             },
-            "required": ["autoreply_key"],
+            "required": ["autoreply_key", "form_fills"],
         }
         model = self.model.removeprefix("models/")
         generation_config = {
@@ -1296,6 +1321,7 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
                 "ticket_summary",
                 "primary_question",
                 "selected_autoreply",
+                "form_fills",
             ],
         }
         model = self.model.removeprefix("models/")
