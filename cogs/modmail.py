@@ -51,13 +51,11 @@ from core.ai_reviewer import (
     GeminiTicketChannelSummaryGenerator,
     GeminiTicketSummaryGenerator,
     NO_MATCH,
-    build_ticket_text,
     build_relayed_reply_transcript,
     decode_ai_text_attachment,
     find_command_references,
     finalize_generated_ai_reply,
     last_relayed_message_is_human_staff,
-    is_acknowledgement_only,
     parse_aireply_argument,
 )
 from core.ai_sorter import (
@@ -130,16 +128,6 @@ class Modmail(commands.Cog):
         if getattr(thread, "_opening_intake_pending", False):
             if not getattr(thread, "_opening_collection_open", False):
                 thread._pending_followup_message = message
-            return
-
-        if (
-            getattr(thread, "_all_closure_alias_ran", False)
-            and is_acknowledgement_only(build_ticket_text(message))
-        ):
-            try:
-                await thread.begin_acknowledgement_closure_workflow(message)
-            except Exception:
-                logger.warning("AI acknowledgement closure check failed.", exc_info=True)
             return
 
         if key in self._ai_test_threads:
