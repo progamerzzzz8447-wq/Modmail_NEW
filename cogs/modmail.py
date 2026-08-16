@@ -145,6 +145,17 @@ class Modmail(commands.Cog):
         if subscribers or getattr(thread, "_opening_alias_subscribed", False):
             thread._intake_collecting = False
             thread._intake_handed_to_agent = True
+            # A subscription hands the conversation to a person, but it must not disable
+            # unrelated configured autoreplies for every later recipient message. Keep this
+            # pass autoreply-only so the intake assistant cannot resume or issue a second
+            # handoff while the durable per-type claims still suppress duplicate replies.
+            try:
+                await thread.begin_followup_autoreply_workflow(message)
+            except Exception:
+                logger.warning(
+                    "AI ticket review failed for a subscribed recipient follow-up.",
+                    exc_info=True,
+                )
         elif getattr(thread, "_awaiting_initial_inquiry", False) or getattr(
             thread, "_intake_collecting", False
         ):
