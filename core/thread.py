@@ -869,7 +869,7 @@ class Thread:
         joint_id = generate_ai_message_joint_id()
         if self.bot.config.get("message_embeds_v2"):
             embed = discord.Embed(
-                title="✦ TUI Airways Support Assistant",
+                title="TUI Airways Support Assistant",
                 description=response_text,
                 color=0x70CBF4,
                 timestamp=discord.utils.utcnow(),
@@ -877,7 +877,7 @@ class Thread:
         else:
             embed = discord.Embed(description=response_text, color=self.bot.mod_color)
         embed.set_author(
-            name=author_name,
+            name="✦ AI assistant",
             icon_url=self.bot.user.display_avatar.url,
             url=f"https://discordapp.com/users/{self.bot.user.id}#{joint_id}",
         )
@@ -922,7 +922,10 @@ class Thread:
         footer = getattr(message.embeds[0], "footer", None)
         footer_text = getattr(footer, "text", "") or ""
         author_name = getattr(message.embeds[0].author, "name", "") or ""
-        return footer_text.startswith(AI_REPLY_FOOTER) or author_name == "AI assistant"
+        return footer_text.startswith(AI_REPLY_FOOTER) or author_name in {
+            "AI assistant",
+            "✦ AI assistant",
+        }
 
     async def _find_legacy_ai_autoreply_messages(self, staff_message) -> typing.List:
         """Match an older unlinked AI staff copy to its recipient DM by content and time."""
