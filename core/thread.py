@@ -1231,6 +1231,15 @@ class Thread:
             for name, response in autoreplies.items()
             if extract_blank_form_fields(response)
         }
+        trigger_matched_autoreplies = []
+        if autoreplies:
+            triggered_choices, _, _ = self._resolve_ai_autoreplies(
+                current_text,
+                require_trigger=True,
+            )
+            trigger_matched_autoreplies = [
+                name for name in triggered_choices if name in autoreplies
+            ]
         assessor = GeminiIntakeAssessment(
             self.bot.session,
             str(api_key),
@@ -1242,6 +1251,7 @@ class Thread:
             questions_asked=intake_questions_asked,
             autoreply_catalog=autoreply_catalog,
             autoreply_forms=autoreply_forms,
+            trigger_matched_autoreplies=trigger_matched_autoreplies,
             trusted_recipient_username=str(
                 getattr(getattr(message, "author", None), "name", "") or ""
             ),

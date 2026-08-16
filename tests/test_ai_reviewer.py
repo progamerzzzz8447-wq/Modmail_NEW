@@ -380,6 +380,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
                     {"field_id": "field_1", "label": "What did you purchase"}
                 ]
             },
+            trigger_matched_autoreplies=["Payment timing"],
             trusted_recipient_username="ticket_writer",
         )
 
@@ -401,6 +402,9 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Hand the ticket to staff as early as reasonably possible", prompt)
         self.assertIn("`ticket_summary`", prompt)
         self.assertIn('"Payment timing": "payment-alias"', prompt)
+        self.assertIn('TRIGGER-MATCHED AUTOREPLIES (DISPLAY NAMES ONLY):', prompt)
+        self.assertIn('["Payment timing"]', prompt)
+        self.assertIn("MUST select it immediately", prompt)
         self.assertIn("TRUSTED RECIPIENT DISCORD USERNAME: ticket_writer", prompt)
         self.assertIn("For disciplinary appeals", prompt)
         self.assertIn("There must be a new substantive question", prompt)

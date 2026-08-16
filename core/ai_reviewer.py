@@ -1397,6 +1397,7 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
         autoreply_forms: typing.Optional[
             typing.Mapping[str, typing.Sequence[typing.Mapping[str, str]]]
         ] = None,
+        trigger_matched_autoreplies: typing.Iterable[str] = (),
         trusted_recipient_username: str = "",
     ):
         if not str(transcript or "").strip():
@@ -1415,6 +1416,11 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             if (autoreply_forms or {}).get(name)
         }
         selection_names = [NO_MATCH, *catalog]
+        trigger_matched_names = [
+            str(name).strip()
+            for name in trigger_matched_autoreplies
+            if str(name).strip() in catalog
+        ]
         trusted_recipient_username = str(trusted_recipient_username or "").strip()
         prompt = (
             "Assess this TUI Airways Roblox/Discord support ticket during automatic intake. "
@@ -1449,7 +1455,14 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             "staff, and `primary_question`, the recipient's main question or requested action. These "
             "must reflect the transcript without inventing details. Review the complete autoreply "
             "catalogue below on every intake assessment, regardless of keywords. Catalogue values "
-            "are alias identifiers, not reply contents. Select an autoreply only when its display "
+            "are alias identifiers, not reply contents. Decide the autoreply selection before "
+            "deciding whether to ask an intake clarification. The separately supplied "
+            "TRIGGER-MATCHED AUTOREPLIES are rules whose administrator-configured words or phrases "
+            "appear in the recipient's request. Treat that as strong routing evidence, while still "
+            "checking that the display name and alias actually fit the request. If one of those "
+            "rules clearly and specifically matches, you MUST select it immediately and MUST NOT "
+            "ask a clarification question instead. The selected alias itself gathers or supplies "
+            "the relevant information. Select an autoreply only when its display "
             "name clearly and specifically fits what the recipient is asking across all of their "
             "messages, with the latest recipient turn controlling the decision. There must be a new "
             "substantive question or request in that latest turn. If it is only thanks, an "
@@ -1474,6 +1487,8 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             "This trusted value may fill only a Discord username field, never a Roblox or other "
             "account field.\n\n"
             f"AUTOREPLY CATALOGUE (DISPLAY NAME -> ALIAS IDENTIFIER):\n{catalog_text}\n\n"
+            "TRIGGER-MATCHED AUTOREPLIES (DISPLAY NAMES ONLY):\n"
+            f"{json.dumps(trigger_matched_names, ensure_ascii=False)}\n\n"
             f"FENCED FORM LINES ONLY:\n"
             f"{json.dumps(form_catalog, ensure_ascii=False, indent=2)}\n\n"
             f"TRANSCRIPT:\n{transcript}"
