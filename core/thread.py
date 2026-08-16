@@ -56,7 +56,6 @@ from core.alias_parser import (
     parse_reply_alias,
 )
 from core.models import DMDisabled, DummyMessage, PermissionLevel, getLogger
-from core.ticket_opened_v2 import send_ticket_opened
 from core import checks
 from core.utils import (
     is_image_url,
@@ -868,7 +867,15 @@ class Thread:
     ) -> None:
         """Deliver a configured AI-selected reply and preserve it in the ticket log."""
         joint_id = generate_ai_message_joint_id()
-        embed = discord.Embed(description=response_text, color=self.bot.mod_color)
+        if self.bot.config.get("message_embeds_v2"):
+            embed = discord.Embed(
+                title="✦ TUI Airways Support Assistant",
+                description=response_text,
+                color=0x70CBF4,
+                timestamp=discord.utils.utcnow(),
+            )
+        else:
+            embed = discord.Embed(description=response_text, color=self.bot.mod_color)
         embed.set_author(
             name=author_name,
             icon_url=self.bot.user.display_avatar.url,
@@ -2197,10 +2204,9 @@ class Thread:
         user_created = initial_message is not None and (creator is None or creator == recipient)
         if user_created:
             await recipient.create_dm()
-            receipt = await send_ticket_opened(recipient)
-            if self.bot.config.get("recipient_thread_close") and receipt is not None:
+            if self.bot.config.get("recipient_thread_close") and initial_message is not None:
                 close_emoji = await self.bot.convert_emoji(self.bot.config["close_emoji"])
-                await self.bot.add_reaction(receipt, close_emoji)
+                await self.bot.add_reaction(initial_message, close_emoji)
 
         # in case it creates a channel outside of category
         overwrites = {self.bot.modmail_guild.default_role: discord.PermissionOverwrite(read_messages=False)}
@@ -2271,51 +2277,6 @@ class Thread:
             except Exception:
                 logger.error("Failed unexpectedly:", exc_info=True)
 
-        async def send_recipient_genesis_message():
-            if user_created:
-                # The connected receipt was delivered before the intake delay.
-                return
-
-            async def run_initial_ai_review():
-                if not user_created:
-                    return
-                try:
-                    await self.consider_ai_autoreply(initial_message)
-                except Exception:
-                    # The connected receipt has already been sent, so AI failure is isolated.
-                    logger.warning(
-                        "AI ticket review failed after the connected ticket-opened message.",
-                        exc_info=True,
-                    )
-
-            # Allow disabling the connected DM receipt via config.
-            if not self.bot.config.get("thread_creation_send_dm_embed"):
-                # If self-closable is enabled, add the close reaction to the user's
-                # original message instead so functionality is preserved without an embed.
-                try:
-                    recipient_thread_close = self.bot.config.get("recipient_thread_close")
-                    if recipient_thread_close and initial_message is not None:
-                        close_emoji = self.bot.config["close_emoji"]
-                        close_emoji = await self.bot.convert_emoji(close_emoji)
-                        await self.bot.add_reaction(initial_message, close_emoji)
-                except Exception as e:
-                    logger.info("Failed to add self-close reaction to initial message: %s", e)
-                await run_initial_ai_review()
-                return
-
-            recipient_thread_close = self.bot.config.get("recipient_thread_close")
-
-            if user_created:
-                # Always await the CONNECTED receipt before any automatic AI response.
-                msg = await send_ticket_opened(recipient)
-
-                if recipient_thread_close and msg is not None:
-                    close_emoji = self.bot.config["close_emoji"]
-                    close_emoji = await self.bot.convert_emoji(close_emoji)
-                    await self.bot.add_reaction(msg, close_emoji)
-
-                await run_initial_ai_review()
-
         async def send_persistent_notes():
             notes = await self.bot.api.find_notes(self.recipient)
             ids = {}
@@ -2374,13 +2335,11 @@ class Thread:
                 self._opening_introduction_sent = True
                 self._intake_collecting = True
             except Exception:
-                # The connected receipt and ordinary Modmail flow remain authoritative.
                 logger.warning(
                     "Could not send the AI intake introduction; continuing normal handling.",
                     exc_info=True,
                 )
         await asyncio.gather(
-            send_recipient_genesis_message(),
             activate_auto_triggers(),
             send_persistent_notes(),
         )
@@ -3573,6 +3532,38 @@ class Thread:
                 footer_text += " • Forwarded"
             embed.set_footer(text=footer_text)
             embed.colour = self.bot.recipient_color
+
+        if self.bot.config.get("message_embeds_v2"):
+            embed.timestamp = message.created_at
+            existing_footer = embed.footer.text if embed.footer else ""
+            if note:
+                embed.title = "Internal Support Note"
+                embed.colour = 0x5865F2
+                footer_prefix = "TUI Airways • Staff only"
+            elif from_mod:
+                embed.title = (
+                    "TUI Airways • Anonymous Staff Reply"
+                    if anonymous
+                    else "TUI Airways • Staff Reply"
+                )
+                embed.colour = 0xD40E14
+                footer_prefix = "TUI Airways Support"
+            else:
+                display_name = (
+                    getattr(author, "display_name", None)
+                    or getattr(author, "name", None)
+                    or "Recipient"
+                )
+                embed.title = f"Message from {display_name}"
+                embed.colour = 0x70CBF4
+                footer_prefix = "Recipient message"
+            embed.set_footer(
+                text=(
+                    f"{footer_prefix} • {existing_footer}"
+                    if existing_footer
+                    else footer_prefix
+                )
+            )
 
         if (from_mod or note) and not thread_creation:
             delete_message = not bool(message.attachments)

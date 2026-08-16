@@ -2448,6 +2448,37 @@ class Modmail(commands.Cog):
         await session.run()
 
     @commands.command()
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def v2(self, ctx, state: str = None):
+        """Enable or disable the redesigned ticket-message embeds."""
+        normalized = str(state or "").strip().casefold()
+        if normalized not in {"on", "off"}:
+            current = "on" if self.bot.config.get("message_embeds_v2") else "off"
+            raise commands.BadArgument(
+                f"Use `{self.bot.prefix}v2 on` or `{self.bot.prefix}v2 off`. "
+                f"V2 embeds are currently **{current}**."
+            )
+
+        enabled = normalized == "on"
+        self.bot.config["message_embeds_v2"] = enabled
+        await self.bot.config.update()
+
+        embed = discord.Embed(
+            title=f"Ticket message V2 is now {'enabled' if enabled else 'disabled'}",
+            description=(
+                "New staff, AI, alias, snippet, and recipient messages will use the V2 "
+                "embed design. Existing messages are unchanged."
+                if enabled
+                else "New ticket messages have returned to the existing embed design. "
+                "Existing messages are unchanged."
+            ),
+            color=0x70CBF4 if enabled else self.bot.main_color,
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.set_footer(text=f"Changed by {ctx.author}")
+        await ctx.send(embed=embed)
+
+    @commands.command()
     @checks.has_permissions(PermissionLevel.SUPPORTER)
     @checks.thread_only()
     async def reply(self, ctx, *, msg: str = ""):

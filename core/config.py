@@ -85,6 +85,7 @@ class ConfigManager:
         "thread_creation_contact_response": "{creator.name} has opened a Modmail thread.",
         "thread_creation_title": "Thread Created",
         "thread_creation_send_dm_embed": True,
+        "message_embeds_v2": False,
         "thread_close_footer": "Replying will create a new thread",
         "thread_close_title": "Thread Closed",
         "thread_close_response": "{closer.mention} has closed this Modmail thread.",
@@ -304,6 +305,7 @@ class ConfigManager:
         "snooze_store_attachments",
         # thread creation menu booleans
         "thread_creation_send_dm_embed",
+        "message_embeds_v2",
         "thread_creation_menu_enabled",
         "thread_creation_menu_close_on_timeout",
         "thread_creation_menu_anonymous_menu",
