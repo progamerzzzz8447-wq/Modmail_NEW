@@ -23,6 +23,7 @@ class HumanResourcesBridge(commands.Cog):
         self.bot = bot
         self._case_channels = set()
         self._sync_locks = {}
+        self._last_error = None
 
     @property
     def enabled(self):
@@ -84,10 +85,13 @@ class HumanResourcesBridge(commands.Cog):
             ) as response:
                 body = await response.text()
                 if response.status >= 300:
+                    self._last_error = f"HTTP {response.status}: {body[:500]}"
                     logger.error("HR bridge returned HTTP %s: %s", response.status, body[:1000])
                     return None
+                self._last_error = None
                 return await response.json()
-        except Exception:
+        except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"
             logger.error("HR bridge request failed.", exc_info=True)
             return None
 
@@ -243,7 +247,10 @@ class HumanResourcesBridge(commands.Cog):
         for channel in category.text_channels:
             if await self._ensure_case(channel, backfill=True):
                 succeeded += 1
-        await status.edit(content=f"HR synchronization complete: {succeeded}/{len(category.text_channels)} ticket(s) synchronized.")
+        result = f"HR synchronization complete: {succeeded}/{len(category.text_channels)} ticket(s) synchronized."
+        if self._last_error:
+            result += f"\nLast bridge error: `{self._last_error[:1500]}`"
+        await status.edit(content=result)
 
     @commands.Cog.listener()
     async def on_guild_channel_update(self, before, after):
