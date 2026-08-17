@@ -1,6 +1,7 @@
 """Secure Discord -> E-Crew Human Resources case bridge."""
 
 import asyncio
+import copy
 import re
 import secrets
 import string
@@ -9,7 +10,7 @@ from typing import Optional
 import discord
 from discord.ext import commands, tasks
 
-from core.models import getLogger
+from core.models import DummyMessage, getLogger
 
 logger = getLogger(__name__)
 CASE_NAME_RE = re.compile(r"^([a-z0-9]{6})-unclaimed$")
@@ -28,9 +29,11 @@ class HumanResourcesBridge(commands.Cog):
 
     async def cog_load(self):
         self.hr_category_reconciliation.start()
+        self.hr_portal_replies.start()
 
     def cog_unload(self):
         self.hr_category_reconciliation.cancel()
+        self.hr_portal_replies.cancel()
 
     @property
     def enabled(self):
@@ -282,6 +285,56 @@ class HumanResourcesBridge(commands.Cog):
             "discord_guild_id": str(category.guild.id),
             "discord_channel_ids": [str(channel.id) for channel in category.text_channels],
         })
+
+    @tasks.loop(seconds=5)
+    async def hr_portal_replies(self):
+        if not self.enabled:
+            return
+        replies = await self._post({"event": "pending_replies"})
+        for request in (replies or {}).get("replies", []):
+            await self._deliver_portal_reply(request)
+
+    @hr_portal_replies.before_loop
+    async def before_hr_portal_replies(self):
+        await self.bot.wait_until_ready()
+
+    async def _deliver_portal_reply(self, request):
+        request_id = str(request.get("id") or "")
+        try:
+            channel = self.bot.get_channel(int(request["discord_channel_id"]))
+            if not isinstance(channel, discord.TextChannel):
+                raise RuntimeError("The Discord ticket channel no longer exists.")
+            thread = await self._thread_for_channel(channel)
+            if thread is None:
+                raise RuntimeError("The Modmail thread could not be found.")
+            author_id = int(request["requester_discord_id"])
+            author = channel.guild.get_member(author_id)
+            if author is None:
+                author = await self.bot.get_or_fetch_member(channel.guild, author_id)
+            if author is None:
+                raise RuntimeError("The portal staff member could not be resolved in Discord.")
+            template = None
+            async for candidate in channel.history(limit=1):
+                template = candidate
+            if template is None:
+                raise RuntimeError("The ticket has no Discord message to use as a reply template.")
+            synthetic = DummyMessage(copy.copy(template))
+            synthetic.author = author
+            synthetic.content = str(request.get("content") or "").strip()
+            synthetic.embeds = []
+            synthetic.stickers = []
+            synthetic.reference = None
+            await thread.reply(synthetic, synthetic.content)
+            await self._post({"event": "reply_complete", "reply_id": request_id})
+            logger.info("Delivered HR portal reply %s to channel %s.", request_id, channel.id)
+        except Exception as exc:
+            logger.error("Could not deliver HR portal reply %s.", request_id, exc_info=True)
+            await self._post({
+                "event": "reply_failed",
+                "reply_id": request_id,
+                "error": f"{type(exc).__name__}: {exc}"[:1000],
+            })
+
     @hr_category_reconciliation.before_loop
     async def before_hr_category_reconciliation(self):
         await self.bot.wait_until_ready()
