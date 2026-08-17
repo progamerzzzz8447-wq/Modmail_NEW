@@ -12,7 +12,8 @@ from discord.ext import commands, tasks
 from core.models import getLogger
 
 logger = getLogger(__name__)
-CASE_NAME_RE = re.compile(r"^case-([a-z0-9]{6})$")
+CASE_NAME_RE = re.compile(r"^([a-z0-9]{6})-unclaimed$")
+LEGACY_CASE_NAME_RE = re.compile(r"^case-([a-z0-9]{6})$")
 CASE_ALPHABET = string.ascii_uppercase + string.digits
 
 
@@ -105,6 +106,18 @@ class HumanResourcesBridge(commands.Cog):
     def _new_case_number():
         return "".join(secrets.choice(CASE_ALPHABET) for _ in range(6))
 
+    async def _case_number_for_channel(self, channel):
+        stored = self.bot.config["hr_case_numbers"].get(str(channel.id))
+        if stored:
+            return str(stored).upper(), False, False
+        current = CASE_NAME_RE.match(channel.name)
+        legacy = LEGACY_CASE_NAME_RE.match(channel.name)
+        match = current or legacy
+        case_number = match.group(1).upper() if match else self._new_case_number()
+        self.bot.config["hr_case_numbers"][str(channel.id)] = case_number
+        await self.bot.config.update()
+        return case_number, match is None, legacy is not None
+
     async def _thread_for_channel(self, channel):
         try:
             return await self.bot.threads.find(channel=channel)
@@ -116,11 +129,13 @@ class HumanResourcesBridge(commands.Cog):
             return None
         lock = self._sync_locks.setdefault(channel.id, asyncio.Lock())
         async with lock:
-            match = CASE_NAME_RE.match(channel.name)
-            case_number = match.group(1).upper() if match else self._new_case_number()
-            if not match:
+            case_number, newly_assigned, legacy_name = await self._case_number_for_channel(channel)
+            if newly_assigned or legacy_name:
                 try:
-                    await channel.edit(name=f"case-{case_number.lower()}", reason="Human Resources case assigned")
+                    channel = await channel.edit(
+                        name=f"{case_number.lower()}-unclaimed",
+                        reason="Human Resources case assigned",
+                    )
                 except discord.HTTPException:
                     logger.warning("Could not rename HR ticket channel %s.", channel.id, exc_info=True)
 
@@ -135,6 +150,7 @@ class HumanResourcesBridge(commands.Cog):
                     "recipient_id": str(getattr(recipient, "id", "")) or None,
                     "recipient_name": str(recipient) if recipient else None,
                     "recipient_avatar_url": str(getattr(getattr(recipient, "display_avatar", None), "url", "")) or None,
+                    "channel_name": channel.name,
                     "status": "open",
                 },
             })
@@ -236,8 +252,27 @@ class HumanResourcesBridge(commands.Cog):
         if not isinstance(category, discord.CategoryChannel):
             return
         for channel in category.text_channels:
-            if channel.id not in self._case_channels or not CASE_NAME_RE.match(channel.name):
+            if channel.id not in self._case_channels:
                 await self._ensure_case(channel, backfill=True)
+        renames = await self._post({"event": "pending_renames"})
+        for request in (renames or {}).get("renames", []):
+            try:
+                channel = self.bot.get_channel(int(request["discord_channel_id"]))
+            except (KeyError, TypeError, ValueError):
+                channel = None
+            if not isinstance(channel, discord.TextChannel):
+                continue
+            requested = re.sub(r"[^a-z0-9_-]+", "-", str(request.get("requested_channel_name") or "").strip().lower())
+            requested = requested.strip("-")[:100]
+            if not requested:
+                continue
+            if channel.name != requested:
+                channel = await channel.edit(name=requested, reason="Human Resources portal rename")
+            await self._post({
+                "event": "rename_complete",
+                "discord_channel_id": str(channel.id),
+                "channel_name": channel.name,
+            })
 
     @hr_category_reconciliation.before_loop
     async def before_hr_category_reconciliation(self):
@@ -278,6 +313,8 @@ class HumanResourcesBridge(commands.Cog):
     async def on_guild_channel_update(self, before, after):
         if self._is_hr_channel(after) and getattr(before, "category_id", None) != self._category_id:
             await self._ensure_case(after, backfill=True)
+        elif self._is_hr_channel(after) and before.name != after.name:
+            await self._ensure_case(after)
 
     @commands.Cog.listener()
     async def on_thread_ready(self, thread, creator, category, initial_message):

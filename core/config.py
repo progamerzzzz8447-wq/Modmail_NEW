@@ -202,6 +202,7 @@ class ConfigManager:
         "subscriptions": {},
         "autoreplies": {},
         "reply_reminders": {},
+        "hr_case_numbers": {},
         "closures": {},
         # Thread creation menu
         "thread_creation_menu_enabled": False,
