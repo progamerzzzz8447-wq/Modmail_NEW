@@ -74,7 +74,7 @@ from core.utils import (
 )
 
 logger = getLogger(__name__)
-AI_INTAKE_MODEL = "gemini-3.1-flash-lite"
+AI_INTAKE_MODEL = "gemini-3.5-flash-lite"
 
 
 def is_greeting_only_intake(value: str) -> bool:

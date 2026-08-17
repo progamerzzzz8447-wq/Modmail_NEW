@@ -962,7 +962,7 @@ class GeminiAutoReplyReviewer:
         session: typing.Any,
         api_key: str,
         *,
-        model: str = "gemini-3.1-flash-lite",
+        model: str = "gemini-3.5-flash-lite",
         timeout_seconds: float = 12,
     ):
         self.session = session

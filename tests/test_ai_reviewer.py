@@ -1067,7 +1067,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             url,
             "https://generativelanguage.googleapis.com/v1beta/models/"
-            "gemini-3.1-flash-lite:generateContent",
+            "gemini-3.5-flash-lite:generateContent",
         )
         generation_config = request["json"]["generationConfig"]
         prompt = request["json"]["contents"][0]["parts"][0]["text"]

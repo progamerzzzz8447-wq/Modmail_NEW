@@ -42,7 +42,7 @@ class ConfigManager:
         "plain_reply_without_command": False,
         # AI autoreplies
         "gemini_ai_enabled": True,
-        "gemini_model": "gemini-3.1-flash-lite",
+        "gemini_model": "gemini-3.5-flash-lite",
         "gemini_log_channel_id": "1526602233737773146",
         "smart_ai_context": "",
         # Scheduled Gemini batch ticket reviews
@@ -233,6 +233,10 @@ class ConfigManager:
         "github_token": None,
         # Gemini API credentials must only be supplied via the environment.
         "gemini_api_key": None,
+        # HR case bridge credentials. These are environment-only secrets.
+        "hr_portal_url": "https://kumgbyivglbzwrmkrqcp.supabase.co",
+        "hr_bot_secret": None,
+        "hr_discord_category_id": None,
         "disable_autoupdates": False,
         "disable_updates": False,
         # Logging

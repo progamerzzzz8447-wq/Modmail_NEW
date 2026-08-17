@@ -235,7 +235,7 @@ class Modmail(commands.Cog):
             generator = GeminiContinuousTestReplyGenerator(
                 self.bot.session,
                 str(api_key),
-                model="gemini-3.1-flash-lite",
+                model=str(self.bot.config.get("gemini_model") or "gemini-3.5-flash-lite"),
                 timeout_seconds=30,
             )
             response = await generator.generate(transcript)
@@ -2779,7 +2779,7 @@ class Modmail(commands.Cog):
         generator = generator_cls(
             self.bot.session,
             str(api_key),
-            model=str(self.bot.config.get("gemini_model") or "gemini-3.1-flash-lite"),
+            model=str(self.bot.config.get("gemini_model") or "gemini-3.5-flash-lite"),
             timeout_seconds=30,
         )
 
