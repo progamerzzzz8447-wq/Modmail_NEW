@@ -7,7 +7,7 @@ import string
 from typing import Optional
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from core.models import getLogger
 
@@ -24,6 +24,12 @@ class HumanResourcesBridge(commands.Cog):
         self._case_channels = set()
         self._sync_locks = {}
         self._last_error = None
+
+    async def cog_load(self):
+        self.hr_category_reconciliation.start()
+
+    def cog_unload(self):
+        self.hr_category_reconciliation.cancel()
 
     @property
     def enabled(self):
@@ -220,6 +226,22 @@ class HumanResourcesBridge(commands.Cog):
                 "discord_channel_id": str(message.channel.id),
                 "message": payload,
             })
+
+    @tasks.loop(seconds=15)
+    async def hr_category_reconciliation(self):
+        """Recover category moves missed while Discord reconnects or caches update."""
+        if not self.enabled:
+            return
+        category = self.bot.get_channel(self._category_id)
+        if not isinstance(category, discord.CategoryChannel):
+            return
+        for channel in category.text_channels:
+            if channel.id not in self._case_channels or not CASE_NAME_RE.match(channel.name):
+                await self._ensure_case(channel, backfill=True)
+
+    @hr_category_reconciliation.before_loop
+    async def before_hr_category_reconciliation(self):
+        await self.bot.wait_until_ready()
 
     @commands.Cog.listener()
     async def on_ready(self):
