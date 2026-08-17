@@ -2621,7 +2621,25 @@ class Thread:
                     embed.description = message
 
                 if user is not None:
-                    tasks.append(user.send(embed=embed))
+                    async def send_close_message(recipient=user):
+                        try:
+                            await recipient.send(embed=embed)
+                        except discord.Forbidden as exc:
+                            # A recipient may have left every mutual guild, blocked the bot,
+                            # or disabled DMs. Closing/logging the staff ticket must still finish.
+                            logger.info(
+                                "Could not deliver thread-close DM to recipient %s: %s",
+                                getattr(recipient, "id", "unknown"),
+                                exc,
+                            )
+                        except discord.NotFound as exc:
+                            logger.info(
+                                "Recipient %s was unavailable for thread-close DM: %s",
+                                getattr(recipient, "id", "unknown"),
+                                exc,
+                            )
+
+                    tasks.append(send_close_message())
 
         if delete_channel and self.channel:
             tasks.append(self.channel.delete())

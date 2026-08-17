@@ -28,6 +28,16 @@ class HumanResourcesBridge(commands.Cog):
     def enabled(self):
         return bool(self._portal_url and self._secret and self._category_id)
 
+    def _configuration_problem(self):
+        missing = []
+        if not self._portal_url:
+            missing.append("HR_PORTAL_URL")
+        if not self._secret:
+            missing.append("HR_BOT_SECRET")
+        if not self._category_id:
+            missing.append("HR_DISCORD_CATEGORY_ID (or a category named Human Resources)")
+        return ", ".join(missing)
+
     @property
     def _portal_url(self):
         return str(self.bot.config.get("hr_portal_url", convert=False) or "").rstrip("/")
@@ -210,12 +220,30 @@ class HumanResourcesBridge(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         if not self.enabled:
-            logger.info("HR bridge disabled; configure HR_PORTAL_URL, HR_BOT_SECRET and HR_DISCORD_CATEGORY_ID.")
+            logger.warning("HR bridge disabled; missing %s.", self._configuration_problem())
             return
         category = self.bot.get_channel(self._category_id)
         if isinstance(category, discord.CategoryChannel):
             for channel in category.text_channels:
                 self.bot.loop.create_task(self._ensure_case(channel, backfill=True))
+
+    @commands.command(name="hrsync")
+    @commands.is_owner()
+    async def hr_sync(self, ctx):
+        """Validate the HR bridge and backfill every ticket in its category."""
+        if not self.enabled:
+            await ctx.send(f"HR bridge is disabled. Missing: `{self._configuration_problem()}`.")
+            return
+        category = self.bot.get_channel(self._category_id)
+        if not isinstance(category, discord.CategoryChannel):
+            await ctx.send("The configured Human Resources category could not be found.")
+            return
+        status = await ctx.send(f"Synchronizing {len(category.text_channels)} HR ticket(s)…")
+        succeeded = 0
+        for channel in category.text_channels:
+            if await self._ensure_case(channel, backfill=True):
+                succeeded += 1
+        await status.edit(content=f"HR synchronization complete: {succeeded}/{len(category.text_channels)} ticket(s) synchronized.")
 
     @commands.Cog.listener()
     async def on_guild_channel_update(self, before, after):
