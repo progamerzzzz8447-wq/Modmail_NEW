@@ -141,6 +141,7 @@ class Thread:
         self._auto_close_check_active = False
         self._auto_close_check_message = None
         self._all_closure_alias_ran = False
+        self._subscription_warning_times = {}
         # --- SNOOZE STATE ---
         self.snoozed = False  # True if thread is snoozed
         self.snooze_data = None  # Dict with channel/category/position/messages for restoration
@@ -3062,7 +3063,7 @@ class Thread:
             or getattr(author, "id", None) == getattr(self.bot.user, "id", None)
         )
         if not trusted_system_reply:
-            self.ensure_staff_reply_subscription(author)
+            await self.ensure_staff_reply_subscription(author)
 
         # If this thread was snoozed using move-behavior, unsnooze automatically when a mod replies
         try:
@@ -3195,15 +3196,26 @@ class Thread:
         self.bot.dispatch("thread_reply", self, True, message, anonymous, plain)
         return (user_msg, msg)  # sent_to_user, sent_to_thread_channel
 
-    def ensure_staff_reply_subscription(self, author) -> None:
+    async def ensure_staff_reply_subscription(self, author) -> None:
         """Reject a human-authored recipient reply unless their user or role is subscribed."""
         subscriptions = self.bot.config["subscriptions"].get(str(self.id), [])
         if author_has_thread_subscription(subscriptions, author):
             return
-        raise CommandError(
-            "You cannot reply to this ticket because neither you nor any of your roles "
-            "is subscribed. Subscribe yourself or an appropriate role first."
+        warning = (
+            f"**Subscription required**\nYou must run `{self.bot.prefix}sub` to subscribe "
+            "yourself, or subscribe a role you hold, before sending messages or using reply "
+            "aliases in this ticket."
         )
+        author_id = getattr(author, "id", 0)
+        now = time.monotonic()
+        last_warning = self._subscription_warning_times.get(author_id, 0)
+        if now - last_warning >= 3:
+            self._subscription_warning_times[author_id] = now
+            await self.channel.send(
+                warning,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        raise commands.CheckFailure(warning)
 
     async def send(
         self,
