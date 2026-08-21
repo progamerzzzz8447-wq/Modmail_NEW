@@ -56,6 +56,7 @@ from core.alias_parser import (
     parse_reply_alias,
 )
 from core.models import DMDisabled, DummyMessage, PermissionLevel, getLogger
+from core.subscriptions import author_has_thread_subscription
 from core import checks
 from core.utils import (
     is_image_url,
@@ -3052,6 +3053,17 @@ class Thread:
         Tuple[List[discord.Message], discord.Message]
             A list of messages sent to recipients and the copy sent in the thread channel.
         """
+        author = getattr(message, "_reply_authorizer", None) or getattr(
+            message, "author", None
+        )
+        trusted_system_reply = bool(
+            getattr(message, "_ai_autoreply", False)
+            or getattr(message, "_menu_invoked", False)
+            or getattr(author, "id", None) == getattr(self.bot.user, "id", None)
+        )
+        if not trusted_system_reply:
+            self.ensure_staff_reply_subscription(author)
+
         # If this thread was snoozed using move-behavior, unsnooze automatically when a mod replies
         try:
             behavior = (self.bot.config.get("snooze_behavior") or "delete").lower()
@@ -3182,6 +3194,16 @@ class Thread:
 
         self.bot.dispatch("thread_reply", self, True, message, anonymous, plain)
         return (user_msg, msg)  # sent_to_user, sent_to_thread_channel
+
+    def ensure_staff_reply_subscription(self, author) -> None:
+        """Reject a human-authored recipient reply unless their user or role is subscribed."""
+        subscriptions = self.bot.config["subscriptions"].get(str(self.id), [])
+        if author_has_thread_subscription(subscriptions, author):
+            return
+        raise CommandError(
+            "You cannot reply to this ticket because neither you nor any of your roles "
+            "is subscribed. Subscribe yourself or an appropriate role first."
+        )
 
     async def send(
         self,

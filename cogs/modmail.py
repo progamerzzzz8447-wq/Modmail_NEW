@@ -2527,6 +2527,7 @@ class Modmail(commands.Cog):
         """Send and log a thread reply under another user's visible identity."""
         synthetic = DummyMessage(copy.copy(ctx.message))
         synthetic.author = user
+        synthetic._reply_authorizer = ctx.author
         synthetic.content = message
         async with safe_typing(ctx):
             await ctx.thread.reply(synthetic, message)
@@ -2536,6 +2537,7 @@ class Modmail(commands.Cog):
     @checks.thread_only()
     async def fakeautoreply(self, ctx, *, message: str):
         """Send staff-provided text using the AI autoreply presentation."""
+        ctx.thread.ensure_staff_reply_subscription(ctx.author)
         if len(message) > 4_000:
             raise commands.BadArgument("Fake AI autoreplies cannot exceed 4,000 characters.")
 
@@ -2574,6 +2576,7 @@ class Modmail(commands.Cog):
     @checks.thread_only()
     async def aihi(self, ctx):
         """Send one of four pre-written AI-assistance introductions without calling Gemini."""
+        ctx.thread.ensure_staff_reply_subscription(ctx.author)
         message = secrets.choice(AI_HELLO_MESSAGES)
         async with safe_typing(ctx):
             await ctx.thread._send_ai_autoreply(
@@ -2599,6 +2602,7 @@ class Modmail(commands.Cog):
     @checks.thread_only()
     async def aiclose(self, ctx):
         """Send the standard closure reply from the AI identity, then close the ticket."""
+        ctx.thread.ensure_staff_reply_subscription(ctx.author)
         async with safe_typing(ctx):
             await ctx.thread._send_ai_autoreply(
                 "Manual AI ticket closure",
@@ -2627,6 +2631,9 @@ class Modmail(commands.Cog):
             raise commands.BadArgument(
                 f"Use `{self.bot.prefix}aitest` or `{self.bot.prefix}aitest stop`."
             )
+
+        if normalized_mode != "stop":
+            ctx.thread.ensure_staff_reply_subscription(ctx.author)
 
         key = str(ctx.thread.id)
         if normalized_mode == "stop":
@@ -2713,6 +2720,8 @@ class Modmail(commands.Cog):
         staff_attachment_context: str = "",
     ):
         """Generate, deliver, and audit a manual AI reply from permitted ticket context."""
+        if not staff_only:
+            ctx.thread.ensure_staff_reply_subscription(ctx.author)
         api_key = self.bot.config.get("gemini_api_key", convert=False)
         if not api_key or self.bot.session is None:
             raise commands.CommandError("Gemini API credentials are not configured.")
@@ -3087,6 +3096,8 @@ class Modmail(commands.Cog):
             )
 
         staff_only = normalized_mode == "raw"
+        if not staff_only:
+            ctx.thread.ensure_staff_reply_subscription(ctx.author)
         skip_ai_check = False
         if not staff_only:
             try:
