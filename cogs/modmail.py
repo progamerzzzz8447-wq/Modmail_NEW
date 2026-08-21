@@ -2537,7 +2537,7 @@ class Modmail(commands.Cog):
     @checks.thread_only()
     async def fakeautoreply(self, ctx, *, message: str):
         """Send staff-provided text using the AI autoreply presentation."""
-        await ctx.thread.ensure_staff_reply_subscription(ctx.author)
+        await ctx.thread.ensure_staff_reply_subscription(ctx.author, ctx.message)
         if len(message) > 4_000:
             raise commands.BadArgument("Fake AI autoreplies cannot exceed 4,000 characters.")
 
@@ -2576,7 +2576,7 @@ class Modmail(commands.Cog):
     @checks.thread_only()
     async def aihi(self, ctx):
         """Send one of four pre-written AI-assistance introductions without calling Gemini."""
-        await ctx.thread.ensure_staff_reply_subscription(ctx.author)
+        await ctx.thread.ensure_staff_reply_subscription(ctx.author, ctx.message)
         message = secrets.choice(AI_HELLO_MESSAGES)
         async with safe_typing(ctx):
             await ctx.thread._send_ai_autoreply(
@@ -2602,7 +2602,7 @@ class Modmail(commands.Cog):
     @checks.thread_only()
     async def aiclose(self, ctx):
         """Send the standard closure reply from the AI identity, then close the ticket."""
-        await ctx.thread.ensure_staff_reply_subscription(ctx.author)
+        await ctx.thread.ensure_staff_reply_subscription(ctx.author, ctx.message)
         async with safe_typing(ctx):
             await ctx.thread._send_ai_autoreply(
                 "Manual AI ticket closure",
@@ -2633,7 +2633,7 @@ class Modmail(commands.Cog):
             )
 
         if normalized_mode != "stop":
-            await ctx.thread.ensure_staff_reply_subscription(ctx.author)
+            await ctx.thread.ensure_staff_reply_subscription(ctx.author, ctx.message)
 
         key = str(ctx.thread.id)
         if normalized_mode == "stop":
@@ -2721,7 +2721,7 @@ class Modmail(commands.Cog):
     ):
         """Generate, deliver, and audit a manual AI reply from permitted ticket context."""
         if not staff_only:
-            await ctx.thread.ensure_staff_reply_subscription(ctx.author)
+            await ctx.thread.ensure_staff_reply_subscription(ctx.author, ctx.message)
         api_key = self.bot.config.get("gemini_api_key", convert=False)
         if not api_key or self.bot.session is None:
             raise commands.CommandError("Gemini API credentials are not configured.")
@@ -3097,7 +3097,7 @@ class Modmail(commands.Cog):
 
         staff_only = normalized_mode == "raw"
         if not staff_only:
-            await ctx.thread.ensure_staff_reply_subscription(ctx.author)
+            await ctx.thread.ensure_staff_reply_subscription(ctx.author, ctx.message)
         skip_ai_check = False
         if not staff_only:
             try:

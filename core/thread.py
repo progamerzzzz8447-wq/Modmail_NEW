@@ -142,6 +142,7 @@ class Thread:
         self._auto_close_check_message = None
         self._all_closure_alias_ran = False
         self._subscription_warning_times = {}
+        self._alias_subscription_bypass_authors = set()
         # --- SNOOZE STATE ---
         self.snoozed = False  # True if thread is snoozed
         self.snooze_data = None  # Dict with channel/category/position/messages for restoration
@@ -3063,7 +3064,7 @@ class Thread:
             or getattr(author, "id", None) == getattr(self.bot.user, "id", None)
         )
         if not trusted_system_reply:
-            await self.ensure_staff_reply_subscription(author)
+            await self.ensure_staff_reply_subscription(author, message)
 
         # If this thread was snoozed using move-behavior, unsnooze automatically when a mod replies
         try:
@@ -3196,9 +3197,12 @@ class Thread:
         self.bot.dispatch("thread_reply", self, True, message, anonymous, plain)
         return (user_msg, msg)  # sent_to_user, sent_to_thread_channel
 
-    async def ensure_staff_reply_subscription(self, author) -> None:
+    async def ensure_staff_reply_subscription(self, author, source_message=None) -> None:
         """Reject a human-authored recipient reply unless their user or role is subscribed."""
         subscriptions = self.bot.config["subscriptions"].get(str(self.id), [])
+        author_id = getattr(author, "id", None)
+        if author_id in self._alias_subscription_bypass_authors:
+            return
         if author_has_thread_subscription(subscriptions, author):
             return
         warning = (
@@ -3206,14 +3210,27 @@ class Thread:
             "yourself, or subscribe a role you hold, before sending messages or using reply "
             "aliases in this ticket."
         )
-        author_id = getattr(author, "id", 0)
+        author_id = author_id or 0
         now = time.monotonic()
         last_warning = self._subscription_warning_times.get(author_id, 0)
         if now - last_warning >= 3:
             self._subscription_warning_times[author_id] = now
+            reference_message = source_message
+            seen_proxies = set()
+            while (
+                reference_message is not None
+                and hasattr(reference_message, "_message")
+                and id(reference_message) not in seen_proxies
+            ):
+                seen_proxies.add(id(reference_message))
+                reference_message = reference_message._message
+            reference = None
+            if isinstance(reference_message, discord.Message):
+                reference = reference_message.to_reference(fail_if_not_exists=False)
             await self.channel.send(
                 warning,
                 allowed_mentions=discord.AllowedMentions.none(),
+                reference=reference,
             )
         raise commands.CheckFailure(warning)
 
