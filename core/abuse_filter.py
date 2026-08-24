@@ -56,11 +56,6 @@ _ABUSE_PATTERNS: typing.Tuple[re.Pattern, ...] = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
         r"(?<![a-z0-9])g[o0]{2}n(?![a-z0-9])",
-        r"(?<![a-z0-9])n[\W_]*words?(?![a-z0-9])",
-        _obfuscated_word("nigger"),
-        _obfuscated_word("niggers"),
-        _obfuscated_word("nigga"),
-        _obfuscated_word("niggas"),
         _obfuscated_word("faggot"),
         _obfuscated_word("faggots"),
         _obfuscated_word("retard"),

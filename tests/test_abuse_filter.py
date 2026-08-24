@@ -8,14 +8,10 @@ from core.abuse_filter import (
 
 
 class AbuseFilterTests(unittest.TestCase):
-    def test_detects_configured_term_n_word_forms_and_severe_abuse(self):
+    def test_detects_configured_term_and_severe_abuse(self):
         abusive_messages = (
             "You are a goon.",
             "What a g00n",
-            "the n-word",
-            "the n words",
-            "n.i.g.g.e.r",
-            "nigggger",
             "f@gg0t",
             "retards",
             "go fuck yourself",
@@ -25,6 +21,20 @@ class AbuseFilterTests(unittest.TestCase):
         for message in abusive_messages:
             with self.subTest(message=message):
                 self.assertTrue(contains_abusive_language(message))
+
+    def test_n_word_family_is_not_a_built_in_trigger(self):
+        acceptable_messages = (
+            "the n-word",
+            "the n words",
+            "n.i.g.g.e.r",
+            "nigggger",
+            "nigga",
+            "niggas",
+        )
+
+        for message in acceptable_messages:
+            with self.subTest(message=message):
+                self.assertFalse(contains_abusive_language(message))
 
     def test_uses_whole_words_to_avoid_embedded_fragment_matches(self):
         acceptable_messages = (
