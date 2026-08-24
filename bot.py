@@ -1328,6 +1328,12 @@ class ModmailBot(commands.Bot):
                 logger.warning("Alias %s is invalid, removing.", invoker)
                 self.aliases.pop(invoker)
 
+            alias_grants_subscription = any(
+                step.strip().split(maxsplit=1)[0].casefold() in {"sub", "subscribe"}
+                for step in aliases
+                if step.strip()
+            )
+
             context_message = DeferredDeleteMessage(message) if len(aliases) > 1 else message
             for alias in aliases:
                 command = None
@@ -1342,6 +1348,7 @@ class ModmailBot(commands.Bot):
                 ctx_ = cls(prefix=self.prefix, view=view, bot=self, message=context_message)
                 ctx_.thread = thread
                 ctx_._manual_alias_name = invoker
+                ctx_._alias_grants_subscription = alias_grants_subscription
                 discord.utils.find(view.skip_string, prefixes)
                 ctx_.invoked_with = view.get_word().lower()
                 ctx_.command = command or self.all_commands.get(ctx_.invoked_with)
@@ -1561,7 +1568,16 @@ class ModmailBot(commands.Bot):
                             logger.warning("Failed to add queued-reaction: %s", e)
                         continue
 
-                await self.invoke(ctx)
+                alias_bypass_author_id = None
+                if thread is not None and getattr(ctx, "_alias_grants_subscription", False):
+                    alias_bypass_author_id = getattr(ctx.author, "id", None)
+                    if alias_bypass_author_id is not None:
+                        thread._alias_subscription_bypass_authors.add(alias_bypass_author_id)
+                try:
+                    await self.invoke(ctx)
+                finally:
+                    if alias_bypass_author_id is not None:
+                        thread._alias_subscription_bypass_authors.discard(alias_bypass_author_id)
                 if (
                     thread is not None
                     and not getattr(ctx, "command_failed", False)
