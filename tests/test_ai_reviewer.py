@@ -13,6 +13,7 @@ from core.ai_reviewer import (
     FORM_AUTOFILL_NOTICE,
     AI_HELLO_FOOTER,
     AI_REPLY_FOOTER,
+    NO_MATCH,
     ROBLOX_GAME_PASS_AUTOREPLY,
     TUI_SUPPORT_ASSISTANT_POLICY,
     GeminiAnnoyReplyGenerator,
@@ -44,6 +45,7 @@ from core.ai_reviewer import (
     is_acknowledgement_only,
     is_ticket_routing_request,
     last_relayed_message_is_human_staff,
+    normalize_generated_reply_layout,
     parse_aireply_argument,
     recipient_username_form_fills,
     recipient_evidence_from_transcript,
@@ -410,6 +412,90 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("There must be a new substantive question", prompt)
         self.assertNotIn("Use the application form", prompt)
 
+    async def test_intake_assessment_retries_transient_failure_with_longer_timeout(self):
+        assessment = {
+            "clear": True,
+            "resolved": False,
+            "remaining_inquiries": ["suggestion review"],
+            "clarification_question": "",
+            "ticket_summary": "Recipient submitted a suggestion.",
+            "primary_question": "Can the team review this suggestion?",
+            "selected_autoreply": NO_MATCH,
+            "form_fills": [],
+        }
+        session = FakeSession(
+            [
+                FakeResponse(503, {}),
+                FakeResponse(200, generate_content_output(assessment)),
+            ]
+        )
+        assessor = GeminiIntakeAssessment(session, "key")
+
+        result = await assessor.assess(
+            "Please review my suggestion.",
+            autoreply_sent=False,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(session.calls, 2)
+        self.assertEqual(session.request[1]["timeout"], 30)
+        self.assertEqual(assessor.last_outcome, "assessed")
+
+    async def test_intake_assessment_retries_invalid_json_and_tolerates_optional_omissions(self):
+        session = FakeSession(
+            [
+                FakeResponse(200, generate_content_output("{not valid json")),
+                FakeResponse(
+                    200,
+                    generate_content_output(
+                        {
+                            "clear": True,
+                            "resolved": False,
+                            "selected_autoreply": "payment timing",
+                        }
+                    ),
+                ),
+            ]
+        )
+        assessor = GeminiIntakeAssessment(session, "key")
+
+        result = await assessor.assess(
+            "When will payment arrive?",
+            autoreply_sent=False,
+            autoreply_catalog={"Payment Timing": "payment"},
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(session.calls, 2)
+        self.assertEqual(result["selected_autoreply"], "Payment Timing")
+        self.assertEqual(result["remaining_inquiries"], [])
+        self.assertEqual(result["form_fills"], {})
+
+    async def test_intake_assessment_unknown_alias_safely_becomes_no_match(self):
+        session = FakeSession(
+            FakeResponse(
+                200,
+                generate_content_output(
+                    {
+                        "clear": True,
+                        "resolved": False,
+                        "remaining_inquiries": ["staff review"],
+                        "clarification_question": "",
+                        "ticket_summary": "A request needs staff review.",
+                        "primary_question": "Can staff review this?",
+                        "selected_autoreply": "invented alias",
+                        "form_fills": [],
+                    }
+                ),
+            )
+        )
+        assessor = GeminiIntakeAssessment(session, "key")
+
+        result = await assessor.assess("Please review this.", autoreply_sent=False)
+
+        self.assertIsNotNone(result)
+        self.assertIsNone(result["selected_autoreply"])
+
     def test_decodes_utf8_text_attachment_for_aireply(self):
         self.assertEqual(
             decode_ai_text_attachment("context.TXT", b"Useful context \xe2\x9c\x93"),
@@ -430,6 +516,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
 
     def test_aihi_has_four_complete_premade_disclosures(self):
         self.assertEqual(AI_HELLO_FOOTER, AI_REPLY_FOOTER)
+        self.assertEqual(AI_REPLY_FOOTER, "This reply is AI Generated")
         self.assertEqual(len(AI_HELLO_MESSAGES), 4)
         self.assertEqual(len(set(AI_HELLO_MESSAGES)), 4)
         for message in AI_HELLO_MESSAGES:
@@ -441,6 +528,18 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("how can i help you today?", normalized)
             self.assertNotIn("human", normalized)
             self.assertNotIn("real agent", normalized)
+
+    def test_ai_reply_layout_removes_rich_text_space_entities(self):
+        response = (
+            "Our team will assess the suggestion.&#x20;\n\n"
+            "Please allow some time for the team to review it. &#x20;"
+        )
+
+        self.assertEqual(
+            normalize_generated_reply_layout(response),
+            "Our team will assess the suggestion.\n\n"
+            "Please allow some time for the team to review it.",
+        )
 
     def test_extracts_generated_discord_command_references(self):
         self.assertEqual(

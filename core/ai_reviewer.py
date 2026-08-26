@@ -17,9 +17,7 @@ GEMINI_GENERATE_CONTENT_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
 NO_MATCH = "__NO_MATCH__"
-AI_REPLY_FOOTER = (
-    "This reply is AI generated. If you require further assistance, please reply to this message"
-)
+AI_REPLY_FOOTER = "This reply is AI Generated"
 AI_REPLY_CLOSING = "Can I help with anything else?"
 AI_TEST_HUMAN_MARKER = "HUMAN_ASSISTANCE_REQUIRED:"
 AI_ALL_CLOSING = (
@@ -242,6 +240,10 @@ def normalize_generated_reply_layout(response: str) -> str:
     # return the two literal characters instead. Support both forms.
     response = response.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
     response = response.replace("\r\n", "\n").replace("\r", "\n")
+    # Discord does not decode HTML entities in embed descriptions. Some alias content copied
+    # from rich-text editors uses this entity to preserve spaces between paragraphs.
+    response = response.replace("&#x20;", " ").replace("&#X20;", " ")
+    response = "\n".join(line.rstrip() for line in response.split("\n"))
     return response.strip()
 
 
@@ -1387,6 +1389,18 @@ class GeminiFormAutofill(GeminiAutoReplyReviewer):
 class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
     """Determine whether an intake is clear, resolved, or still needs human help."""
 
+    def __init__(
+        self,
+        session: typing.Any,
+        api_key: str,
+        *,
+        model: str = "gemini-3.5-flash-lite",
+        timeout_seconds: float = 30,
+    ):
+        # Intake uses the complete ticket transcript and a larger schema than ordinary
+        # classification, so it needs more than the classifier's twelve-second allowance.
+        super().__init__(session, api_key, model=model, timeout_seconds=timeout_seconds)
+
     async def assess(
         self,
         transcript: str,
@@ -1531,7 +1545,7 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.1,
-                "maxOutputTokens": 1024,
+                "maxOutputTokens": 2048,
                 "responseMimeType": "application/json",
                 "responseSchema": schema,
             },
@@ -1539,38 +1553,112 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
         if model.startswith("gemini-3"):
             payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "minimal"}
         request_url = GEMINI_GENERATE_CONTENT_URL.format(model=quote(model, safe="-._"))
-        try:
-            async with self.session.post(
-                request_url,
-                json=payload,
-                headers={"x-goog-api-key": self.api_key},
-                timeout=self.timeout,
-            ) as response:
-                if response.status != 200:
+        data = None
+        retryable_statuses = {429, 500, 502, 503, 504}
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                async with self.session.post(
+                    request_url,
+                    json=payload,
+                    headers={"x-goog-api-key": self.api_key},
+                    timeout=self.timeout,
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        output = self._extract_output_text(data)
+                        if output:
+                            # Structured output should be bare JSON, but tolerate markdown fences
+                            # and incidental prose so one harmless formatting mistake does not
+                            # abandon the ticket intake.
+                            cleaned_output = output.strip()
+                            if cleaned_output.startswith("```"):
+                                cleaned_output = re.sub(
+                                    r"^```(?:json)?\s*|\s*```$",
+                                    "",
+                                    cleaned_output,
+                                    flags=re.IGNORECASE,
+                                ).strip()
+                            first_brace = cleaned_output.find("{")
+                            last_brace = cleaned_output.rfind("}")
+                            if first_brace >= 0 and last_brace > first_brace:
+                                cleaned_output = cleaned_output[first_brace : last_brace + 1]
+                            try:
+                                result = json.loads(cleaned_output)
+                                if isinstance(result, typing.Mapping):
+                                    break
+                            except (TypeError, ValueError, json.JSONDecodeError):
+                                pass
+                        if attempt < max_attempts - 1:
+                            logger.warning(
+                                "Gemini returned invalid intake JSON; retrying (%s/%s).",
+                                attempt + 1,
+                                max_attempts,
+                            )
+                            await asyncio.sleep(0.5 * (attempt + 1))
+                            continue
+                        self.last_outcome = "invalid_response"
+                        self.last_detail = (
+                            "Gemini returned unusable intake JSON after three attempts."
+                        )
+                        return None
+                    if (
+                        response.status in retryable_statuses
+                        and attempt < max_attempts - 1
+                    ):
+                        logger.warning(
+                            "Gemini intake assessment returned HTTP %s; retrying (%s/%s).",
+                            response.status,
+                            attempt + 1,
+                            max_attempts,
+                        )
+                        await asyncio.sleep(0.5 * (attempt + 1))
+                        continue
                     self.last_outcome = "http_error"
-                    self.last_detail = f"Gemini returned HTTP {response.status}."
+                    retry_detail = f" after {attempt + 1} attempt(s)"
+                    self.last_detail = (
+                        f"Gemini returned HTTP {response.status}{retry_detail}."
+                    )
+                    logger.warning(
+                        "Gemini intake assessment failed with HTTP %s.", response.status
+                    )
                     return None
-                data = await response.json()
-        except Exception as exc:
-            self.last_outcome = "request_error"
-            self.last_detail = f"Gemini intake assessment failed ({type(exc).__name__})."
-            return None
-        output = self._extract_output_text(data)
+            except Exception as exc:
+                if attempt < max_attempts - 1:
+                    logger.warning(
+                        "Gemini intake request failed (%s); retrying (%s/%s).",
+                        type(exc).__name__,
+                        attempt + 1,
+                        max_attempts,
+                    )
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                self.last_outcome = "request_error"
+                self.last_detail = (
+                    f"Gemini intake assessment failed after three attempts "
+                    f"({type(exc).__name__})."
+                )
+                logger.warning("Gemini intake assessment request failed.", exc_info=True)
+                return None
         try:
-            result = json.loads(output or "")
-            clear = bool(result["clear"])
-            resolved = bool(result["resolved"])
+            # Only the decision booleans are indispensable. Older/newer Gemini variants
+            # occasionally omit an empty optional field despite responseSchema requiring it.
+            clear = result.get("clear") is True
+            resolved = result.get("resolved") is True
             remaining = [
                 str(item).strip()[:300]
-                for item in result["remaining_inquiries"]
+                for item in (result.get("remaining_inquiries") or [])
                 if str(item).strip()
             ][:10]
-            clarification = str(result["clarification_question"] or "").strip()[:500]
-            ticket_summary = str(result["ticket_summary"] or "").strip()[:1000]
-            primary_question = str(result["primary_question"] or "").strip()[:500]
-            selected_autoreply = str(result["selected_autoreply"] or "").strip()
+            clarification = str(result.get("clarification_question") or "").strip()[:500]
+            ticket_summary = str(result.get("ticket_summary") or "").strip()[:1000]
+            primary_question = str(result.get("primary_question") or "").strip()[:500]
+            selected_autoreply = str(result.get("selected_autoreply") or NO_MATCH).strip()
             if selected_autoreply not in selection_names:
-                raise ValueError("Gemini selected an unknown intake autoreply.")
+                canonical_names = {name.casefold(): name for name in selection_names}
+                selected_autoreply = canonical_names.get(
+                    selected_autoreply.casefold(), NO_MATCH
+                )
             valid_form_ids = {
                 str(field.get("field_id") or "")
                 for field in form_catalog.get(selected_autoreply, [])

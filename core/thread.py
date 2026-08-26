@@ -46,6 +46,7 @@ from core.ai_reviewer import (
     has_configured_trigger,
     has_roblox_game_pass_url,
     is_acknowledgement_only,
+    normalize_generated_reply_layout,
     recipient_username_form_fills,
     resolve_ai_autoreply_type,
 )
@@ -870,15 +871,21 @@ class Thread:
     ) -> None:
         """Deliver a configured AI-selected reply and preserve it in the ticket log."""
         joint_id = generate_ai_message_joint_id()
+        response_text = normalize_generated_reply_layout(response_text)
+        timestamp = discord.utils.utcnow()
         if self.bot.config.get("message_embeds_v2"):
             embed = discord.Embed(
                 title="TUI Airways Support Assistant",
                 description=response_text,
                 color=0x70CBF4,
-                timestamp=discord.utils.utcnow(),
+                timestamp=timestamp,
             )
         else:
-            embed = discord.Embed(description=response_text, color=self.bot.mod_color)
+            embed = discord.Embed(
+                description=response_text,
+                color=self.bot.mod_color,
+                timestamp=timestamp,
+            )
         embed.set_author(
             name="✦ AI assistant",
             icon_url=self.bot.user.display_avatar.url,
@@ -925,7 +932,7 @@ class Thread:
         footer = getattr(message.embeds[0], "footer", None)
         footer_text = getattr(footer, "text", "") or ""
         author_name = getattr(message.embeds[0].author, "name", "") or ""
-        return footer_text.startswith(AI_REPLY_FOOTER) or author_name in {
+        return footer_text.casefold().startswith("this reply is ai generated") or author_name in {
             "AI assistant",
             "✦ AI assistant",
         }
@@ -1276,7 +1283,12 @@ class Thread:
         if result is None:
             self._intake_collecting = False
             self._intake_handed_to_agent = True
-            await self.channel.send("AI intake assessment failed; awaiting an agent.")
+            failure_detail = str(
+                assessor.last_detail or "Gemini did not return a usable assessment."
+            ).strip()
+            await self.channel.send(
+                f"AI intake assessment failed: {failure_detail} Awaiting an agent."
+            )
             await self._log_ai_check(
                 message,
                 build_ticket_text(message),

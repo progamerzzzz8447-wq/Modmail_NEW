@@ -1709,7 +1709,23 @@ class Modmail(commands.Cog):
         `user_or_role` may be a user ID, mention, name, role ID, mention, name, "everyone", or "here".
         """
         embed = await self._subscribe_target(ctx, user_or_role)
-        return await ctx.send(embed=embed)
+        result = await ctx.send(embed=embed)
+
+        # An autoreply alias uses ``sub`` as its routing action. Subscription alone only affects
+        # future recipient messages, so alert the selected team immediately as part of this run.
+        if getattr(ctx, "_ai_autoreply", False):
+            mention = self.parse_user_or_role(ctx, user_or_role)
+            if mention is not None:
+                await ctx.send(
+                    mention,
+                    allowed_mentions=discord.AllowedMentions(
+                        everyone=mention in {"@here", "@everyone"},
+                        users=isinstance(user_or_role, (discord.Member, discord.User)),
+                        roles=isinstance(user_or_role, discord.Role),
+                        replied_user=False,
+                    ),
+                )
+        return result
 
     async def _subscribe_target(self, ctx, user_or_role):
         """Subscribe a target and return the normal staff-side result embed."""
