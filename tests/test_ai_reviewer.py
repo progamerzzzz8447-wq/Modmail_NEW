@@ -363,6 +363,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
                         "ticket_summary": "Recipient is asking about a gamepass payment.",
                         "primary_question": "When will the gamepass payment arrive?",
                         "selected_autoreply": "Payment timing",
+                        "handoff_team": "Human Resources",
                         "form_fills": [
                             {"field_id": "field_1", "value": "Comfort seat upgrade"}
                         ],
@@ -384,6 +385,10 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             },
             trigger_matched_autoreplies=["Payment timing"],
             trusted_recipient_username="ticket_writer",
+            handoff_teams={
+                "General Support Staff": "General enquiries.",
+                "Human Resources": "Staff conduct and disciplinary matters.",
+            },
         )
 
         self.assertTrue(result["clear"])
@@ -392,6 +397,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["ticket_summary"], "Recipient is asking about a gamepass payment.")
         self.assertEqual(result["primary_question"], "When will the gamepass payment arrive?")
         self.assertEqual(result["selected_autoreply"], "Payment timing")
+        self.assertEqual(result["handoff_team"], "Human Resources")
         self.assertEqual(result["form_fills"], {"field_1": "Comfort seat upgrade"})
         self.assertEqual(session.calls, 1)
         config = session.request[1]["json"]["generationConfig"]
@@ -410,6 +416,8 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("TRUSTED RECIPIENT DISCORD USERNAME: ticket_writer", prompt)
         self.assertIn("For disciplinary appeals", prompt)
         self.assertIn("There must be a new substantive question", prompt)
+        self.assertIn("SMART HANDOFF TEAMS", prompt)
+        self.assertIn("Use General Support Staff", prompt)
         self.assertNotIn("Use the application form", prompt)
 
     async def test_intake_assessment_retries_transient_failure_with_longer_timeout(self):
