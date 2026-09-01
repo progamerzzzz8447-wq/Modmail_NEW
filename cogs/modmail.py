@@ -9,6 +9,7 @@ from itertools import zip_longest
 from typing import Optional, Union, List, Tuple, Literal
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import discord
@@ -1564,6 +1565,45 @@ class Modmail(commands.Cog):
             logger.warning("Failed to append an alias context message to the ticket log.", exc_info=True)
         return staff_message
 
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.thread_only()
+    async def aifeed(self, ctx, *, information: commands.clean_content):
+        """Add trusted ticket-specific context for automatic AI checks without replying."""
+        information = str(information or "").strip()
+        if not information:
+            raise commands.BadArgument("Provide the information the AI should use.")
+        if len(information) > 2_000:
+            raise commands.BadArgument("AI feed information cannot exceed 2,000 characters.")
+
+        # Store only the supplied information, not the command prefix/invocation. This is an
+        # internal log entry: it dispatches no thread reply event, sends nothing to the recipient,
+        # and therefore does not cancel, restart, or debounce an onboarding assessment.
+        feed_entry = SimpleNamespace(
+            id=ctx.message.id,
+            channel=ctx.channel,
+            created_at=ctx.message.created_at,
+            author=ctx.author,
+            content=information,
+            attachments=[],
+        )
+        try:
+            await self.bot.api.append_log(feed_entry, type_="ai_feed")
+        except Exception as exc:
+            logger.warning("Failed to persist ticket AI feed information.", exc_info=True)
+            raise commands.CommandError(
+                "The AI feed could not be saved, so the AI will not use it."
+            ) from exc
+
+        embed = discord.Embed(
+            title="AI feed added",
+            description=information,
+            color=self.bot.main_color,
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.set_footer(text=f"Added by {ctx.author}")
+        await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
     @context.command(name="raw")
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def context_raw(self, ctx):
@@ -2971,6 +3011,8 @@ class Modmail(commands.Cog):
         embed.add_field(
             name="Staff-only raw drafts",
             value=(
+                f"`{prefix}aifeed MESSAGE` — Add trusted ticket-specific context for onboarding "
+                "without replying to the recipient or interrupting intake.\n"
                 f"`{prefix}aireply raw [CONTEXT]` — Generate a helpful copyable draft without "
                 "sending it.\n"
                 f"`{prefix}aiall raw` — Prepare the same closure reply without sending it."

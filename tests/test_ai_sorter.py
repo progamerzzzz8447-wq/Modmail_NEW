@@ -64,12 +64,21 @@ class GeminiTicketBatchReviewerTests(unittest.IsolatedAsyncioTestCase):
                 {"author": {"id": "1", "mod": False}, "content": "Need help"},
                 {"author": {"id": "2", "mod": True}, "content": "What happened?"},
                 {"author": {"id": "9", "mod": True}, "content": "Automated reply"},
+                {
+                    "author": {"id": "2", "mod": True},
+                    "type": "ai_feed",
+                    "content": "This suggestion belongs with the development team.",
+                },
             ],
             bot_user_id=9,
         )
         self.assertIn("[RECIPIENT MESSAGE]\nNeed help", transcript)
         self.assertIn("[STAFF MESSAGE]\nWhat happened?", transcript)
         self.assertIn("[BOT OR AI MESSAGE]\nAutomated reply", transcript)
+        self.assertIn(
+            "[TRUSTED AI FEED]\nThis suggestion belongs with the development team.",
+            transcript,
+        )
 
     def test_only_unnamed_or_unclaimed_tickets_are_rename_eligible(self):
         self.assertTrue(ticket_is_rename_eligible("unnamed"))

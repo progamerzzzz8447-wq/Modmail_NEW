@@ -410,6 +410,8 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("TRUSTED RECIPIENT DISCORD USERNAME: ticket_writer", prompt)
         self.assertIn("For disciplinary appeals", prompt)
         self.assertIn("There must be a new substantive question", prompt)
+        self.assertIn("`TRUSTED AI FEED`", prompt)
+        self.assertIn("do not treat them as recipient intent", prompt)
         self.assertNotIn("Use the application form", prompt)
 
     async def test_intake_assessment_retries_transient_failure_with_longer_timeout(self):
@@ -655,6 +657,12 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
                     "type": "thread_message",
                     "content": "Current recipient message",
                 },
+                {
+                    "message_id": "16",
+                    "author": {"id": "22", "mod": True},
+                    "type": "ai_feed",
+                    "content": "Route suggestions to the development team.",
+                },
             ]
         )
 
@@ -664,12 +672,15 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             bot_user_id=999,
         )
 
-        self.assertEqual(len(context), 14)
+        self.assertEqual(len(context), 15)
         self.assertEqual(context[0]["message"], "Conversation message 1")
-        self.assertEqual(context[-1]["message"], "Private staff note")
+        self.assertEqual(
+            context[-1]["message"], "Route suggestions to the development team."
+        )
         self.assertEqual(context[1]["speaker"], "human_staff")
-        self.assertEqual(context[-2]["speaker"], "ai_or_bot_reply")
-        self.assertEqual(context[-1]["speaker"], "staff_context_or_action")
+        self.assertEqual(context[-3]["speaker"], "ai_or_bot_reply")
+        self.assertEqual(context[-2]["speaker"], "staff_context_or_action")
+        self.assertEqual(context[-1]["speaker"], "trusted_ai_feed")
         self.assertIn("Bot or AI output", str(context))
         self.assertNotIn("Current recipient message", str(context))
 

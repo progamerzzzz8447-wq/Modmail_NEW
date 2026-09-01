@@ -73,7 +73,9 @@ def build_sorting_transcript(
         message_type = str(message.get("type") or "thread_message")
         author_id = str(author.get("id") or "")
         is_staff = author.get("mod") is True
-        if message_type in {"note", "persistent_note"}:
+        if message_type == "ai_feed" and is_staff:
+            speaker = "TRUSTED AI FEED"
+        elif message_type in {"note", "persistent_note"}:
             speaker = "INTERNAL STAFF NOTE"
         elif is_staff and author_id == bot_user_id:
             speaker = "BOT OR AI MESSAGE"
