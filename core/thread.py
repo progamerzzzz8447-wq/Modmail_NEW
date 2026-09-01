@@ -77,6 +77,48 @@ from core.utils import (
 
 logger = getLogger(__name__)
 AI_INTAKE_MODEL = "gemini-3.5-flash-lite"
+AI_HANDOFF_TEAMS = {
+    "Senior Management": {
+        "role_id": 1531741911784624238,
+        "guidance": (
+            "Only genuinely severe or high-risk matters, safeguarding concerns, credible "
+            "threats, major security incidents, or serious escalations with broad impact."
+        ),
+    },
+    "Public Relations": {
+        "role_id": 1448398968634740736,
+        "guidance": "Partnerships, media, events, brand, publicity, and public communications.",
+    },
+    "General Support Staff": {
+        "role_id": 1368713588252082306,
+        "guidance": "General support and the fallback when no specialist team clearly fits.",
+    },
+    "Training & Recruitment": {
+        "role_id": 1442572282475315321,
+        "guidance": (
+            "Applications, recruitment, careers, training, practicals, qualifications, and "
+            "application outcomes."
+        ),
+    },
+    "Absence Manager": {
+        "role_id": 1529615997823352862,
+        "guidance": "All leave-of-absence, LOA, absence, and return-from-leave matters.",
+    },
+    "Heads of Departments": {
+        "role_id": 1423554342170001489,
+        "guidance": (
+            "Department-specific operations, leadership decisions, departmental transfers, "
+            "and matters requiring a department head."
+        ),
+    },
+    "Human Resources": {
+        "role_id": 1442902654035562571,
+        "guidance": (
+            "Staff conduct, disciplinary action or appeals, workplace disputes, staff welfare, "
+            "and internal people matters."
+        ),
+    },
+}
 
 
 def is_greeting_only_intake(value: str) -> bool:
@@ -1275,6 +1317,10 @@ class Thread:
             trusted_recipient_username=str(
                 getattr(getattr(message, "author", None), "name", "") or ""
             ),
+            handoff_teams={
+                name: details["guidance"]
+                for name, details in AI_HANDOFF_TEAMS.items()
+            },
         )
         # A newer recipient message arrived while Gemini was assessing this batch. Its debounced
         # workflow owns the next response, so this stale result must never send a clarification.
@@ -1414,8 +1460,7 @@ class Thread:
             if intake_questions_asked >= AI_INTAKE_MAX_QUESTIONS:
                 self._intake_collecting = False
                 self._intake_handed_to_agent = True
-                await self._send_ai_autoreply("Automatic intake handoff", AI_INTAKE_HANDOFF)
-                await self.channel.send(f"**You may now reply**\n{handoff_context}")
+                await self._send_smart_intake_handoff(result, handoff_context)
                 return
             question = result["clarification_question"] or (
                 "Could you please clarify exactly what you need assistance with?"
@@ -1430,9 +1475,39 @@ class Thread:
 
         await self.channel.send(f"Remaining inquiries: {remaining}\nAwaiting an agent.")
         self._intake_collecting = False
-        await self._send_ai_autoreply("Automatic intake handoff", AI_INTAKE_HANDOFF)
         self._intake_handed_to_agent = True
-        await self.channel.send(f"**You may now reply**\n{handoff_context}")
+        await self._send_smart_intake_handoff(result, handoff_context)
+
+    async def _send_smart_intake_handoff(self, result, handoff_context: str) -> None:
+        """Deliver the existing handoff while naming and notifying the AI-selected team."""
+        team_name = str(result.get("handoff_team") or "General Support Staff")
+        if team_name not in AI_HANDOFF_TEAMS:
+            team_name = "General Support Staff"
+        role_id = AI_HANDOFF_TEAMS[team_name]["role_id"]
+        role_mention = f"<@&{role_id}>"
+        subscription_key = str(self.id)
+        subscriptions = self.bot.config["subscriptions"].setdefault(
+            subscription_key,
+            [],
+        )
+        if role_mention not in subscriptions:
+            subscriptions.append(role_mention)
+            await self.bot.config.update()
+        recipient_message = AI_INTAKE_HANDOFF.replace(
+            "the appropriate team",
+            f"**{team_name}**",
+        )
+        await self._send_ai_autoreply("Automatic intake handoff", recipient_message)
+        await self.channel.send(
+            f"{role_mention}\n**Smart handoff:** {team_name}\n"
+            f"**You may now reply**\n{handoff_context}",
+            allowed_mentions=discord.AllowedMentions(
+                everyone=False,
+                users=False,
+                roles=[discord.Object(id=role_id)],
+                replied_user=False,
+            ),
+        )
 
     async def begin_opening_intake_workflow(self, initial_message) -> None:
         """Observe ten seconds of normally relayed messages before assessing the opening intake."""
