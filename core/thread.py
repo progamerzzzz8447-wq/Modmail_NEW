@@ -1768,11 +1768,11 @@ class Thread:
     async def begin_followup_autoreply_workflow(
         self,
         message,
-        delay: float = 3.0,
+        delay: float = 0.0,
         *,
         full_intake: bool = False,
     ) -> None:
-        """Debounce live follow-ups, then run configured autoreplies and their resolved check."""
+        """Immediately run configured autoreplies and their resolved check for follow-ups."""
         self._followup_messages.append(message)
         self._followup_revision += 1
         revision = self._followup_revision
@@ -1804,9 +1804,9 @@ class Thread:
     async def begin_acknowledgement_closure_workflow(
         self,
         message,
-        delay: float = 3.0,
+        delay: float = 0.0,
     ) -> None:
-        """Debounce an acknowledgement, then close or re-ping subscribers after one AI check."""
+        """Immediately assess an acknowledgement, then close or re-ping subscribers."""
         self._followup_revision += 1
         revision = self._followup_revision
         await asyncio.sleep(delay)
