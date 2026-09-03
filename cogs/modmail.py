@@ -123,6 +123,10 @@ class Modmail(commands.Cog):
                     self._ai_test_threads.discard(key)
             return
 
+        # Any recipient response supersedes the five-minute quiet-ticket timer. The ordinary
+        # intake branch below immediately reassesses the new message and complete transcript.
+        thread.cancel_informative_autoreply_rescan()
+
         # A flightnotlogged selection is a two-stage workflow. Its confirmation must be handled
         # before opening-window, subscription, test-mode, or ordinary autoreply routing.
         if await thread.handle_flightnotlogged_confirmation(message):

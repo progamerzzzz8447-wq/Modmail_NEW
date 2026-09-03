@@ -78,6 +78,7 @@ from core.utils import (
 
 logger = getLogger(__name__)
 AI_INTAKE_MODEL = "gemini-3.5-flash-lite"
+RESOLVED_CATEGORY_ID = 1369044841366814871
 AI_HANDOFF_TEAMS = {
     "Senior Management": {
         "role_id": 1531741911784624238,
@@ -188,6 +189,7 @@ class Thread:
         self._subscription_warning_times = {}
         self._alias_subscription_bypass_authors = set()
         self._pending_flightnotlogged_confirmation = None
+        self._informative_rescan_task = None
         # --- SNOOZE STATE ---
         self.snoozed = False  # True if thread is snoozed
         self.snooze_data = None  # Dict with channel/category/position/messages for restoration
@@ -1292,7 +1294,77 @@ class Thread:
             self._intake_collecting = False
             self._intake_handed_to_agent = True
             await self.channel.send("**You may now reply**")
+        else:
+            self._intake_collecting = True
+            self.schedule_informative_autoreply_rescan(message)
         return True
+
+    def cancel_informative_autoreply_rescan(self) -> None:
+        """Cancel the no-response rescan because the recipient has replied or work changed."""
+        task = self._informative_rescan_task
+        self._informative_rescan_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def schedule_informative_autoreply_rescan(self, source_message) -> None:
+        """Reassess an informative autoreply after five quiet minutes."""
+        self.cancel_informative_autoreply_rescan()
+        # An informative automatic answer temporarily returns ownership to intake so its reply or
+        # quiet-ticket timer can be assessed even if an older workflow had handed the ticket off.
+        self._intake_handed_to_agent = False
+        self._intake_collecting = True
+        revision = self._followup_revision
+
+        async def delayed_rescan():
+            try:
+                await asyncio.sleep(5 * 60)
+                if (
+                    revision != self._followup_revision
+                    or self._pending_flightnotlogged_confirmation is not None
+                    or self.bot.config["subscriptions"].get(str(self.id), [])
+                    or self._opening_alias_subscribed
+                ):
+                    return
+                async with self._intake_workflow_lock:
+                    if revision != self._followup_revision:
+                        return
+                    self._informative_rescan_task = None
+                    await self.run_ai_intake_workflow(
+                        source_message,
+                        opening=False,
+                        autoreply_only=False,
+                    )
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.exception("Five-minute informative autoreply rescan failed.")
+                self._informative_rescan_task = None
+
+        self._informative_rescan_task = self.bot.loop.create_task(delayed_rescan())
+
+    async def _run_automatic_aiall(self) -> None:
+        """Apply the same recipient-facing resolution outcome as the aiall command."""
+        self.cancel_informative_autoreply_rescan()
+        self._all_closure_alias_ran = True
+        await self._send_ai_autoreply("Automatic all-inquiries closure", AI_ALL_CLOSING)
+        resolved_category = self.channel.guild.get_channel(RESOLVED_CATEGORY_ID)
+        if isinstance(resolved_category, discord.CategoryChannel):
+            await self.channel.move(
+                category=resolved_category,
+                end=True,
+                sync_permissions=True,
+                reason="Automatic AI all-inquiries check marked resolved",
+            )
+        else:
+            logger.warning(
+                "Resolved category %s was unavailable during automatic aiall.",
+                RESOLVED_CATEGORY_ID,
+            )
+        await self.channel.edit(
+            name="resolved",
+            reason="Automatic AI all-inquiries check marked resolved",
+        )
+        await self.close(closer=self.bot.user, after=24 * 60 * 60)
 
     async def run_ai_intake_workflow(
         self,
@@ -1332,6 +1404,12 @@ class Thread:
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             await self.channel.send("**You may now reply**")
+            return
+
+        # A newly delivered informative autoreply owns the next decision point. Wait for either
+        # the recipient's next message or its five-minute quiet timer instead of scanning it again
+        # immediately in this same workflow invocation.
+        if autoreply_only and self._informative_rescan_task is not None:
             return
 
         # Later messages do not run automatic generative intake. They may only continue into the
@@ -1545,6 +1623,7 @@ class Thread:
                         await self.channel.send("**You may now reply**")
                     else:
                         self._intake_collecting = True
+                        self.schedule_informative_autoreply_rescan(message)
                     # Never stack an intake clarification or handoff on the selected autoreply.
                     return
                 except Exception:
@@ -1588,12 +1667,7 @@ class Thread:
         if self._opening_autoreply_sent and result["resolved"]:
             self._intake_collecting = False
             self._intake_handed_to_agent = True
-            await self._send_ai_autoreply("Automatic all-inquiries closure", AI_ALL_CLOSING)
-            await self.close(closer=self.bot.user, after=24 * 60 * 60)
-            await self.channel.edit(
-                name="resolved",
-                reason="Automatic intake assessment marked all inquiries resolved",
-            )
+            await self._run_automatic_aiall()
             return
         if not result["clear"]:
             if intake_questions_asked >= AI_INTAKE_MAX_QUESTIONS:
@@ -2419,6 +2493,9 @@ class Thread:
                         )
                     )
                 )
+                if not self._opening_alias_subscribed:
+                    self._intake_collecting = True
+                    self.schedule_informative_autoreply_rescan(message)
                 if alias_action is not None:
                     delivery_status = f'AI alias `{alias_action["alias"]}` executed in full.'
                     if is_initial_message:
