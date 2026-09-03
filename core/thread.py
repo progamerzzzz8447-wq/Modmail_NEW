@@ -33,6 +33,7 @@ from core.ai_reviewer import (
     ROBLOX_GAME_PASS_AUTOREPLY,
     GeminiAutoReplyReviewer,
     GeminiFormAutofill,
+    GeminiFlightLogConfirmationClassifier,
     GeminiIntakeAssessment,
     apply_form_autofills,
     build_autoreply_context,
@@ -186,6 +187,7 @@ class Thread:
         self._all_closure_alias_ran = False
         self._subscription_warning_times = {}
         self._alias_subscription_bypass_authors = set()
+        self._pending_flightnotlogged_confirmation = None
         # --- SNOOZE STATE ---
         self.snoozed = False  # True if thread is snoozed
         self.snooze_data = None  # Dict with channel/category/position/messages for restoration
@@ -1182,6 +1184,116 @@ class Thread:
                 return
             await self._run_ai_review(message, ticket_text)
 
+    @staticmethod
+    def _is_flightnotlogged_alias(alias_action) -> bool:
+        return bool(
+            alias_action
+            and str(alias_action.get("alias") or "").strip().casefold()
+            == "flightnotlogged"
+        )
+
+    async def _request_flightnotlogged_confirmation(
+        self,
+        display_name: str,
+        alias_action,
+        response_text: str,
+        source_message,
+        *,
+        form_fills: typing.Optional[typing.Mapping[str, str]] = None,
+    ) -> None:
+        """Pause the flightnotlogged alias until its eligibility prompt is confirmed."""
+        self._pending_flightnotlogged_confirmation = {
+            "display_name": display_name,
+            "alias_action": alias_action,
+            "response_text": response_text,
+            "form_fills": dict(form_fills or {}),
+        }
+        await self._send_ai_autoreply(
+            "Flight logging dispute confirmation",
+            "We're sorry that your flight has not been correctly logged within eCrew.\n\n"
+            "Before we notify our team, please confirm that **one of the following applies to "
+            "your enquiry:**\n\n"
+            "> - I received a DM stating that I was **ABSENT**, and I wish to dispute this.\n"
+            "> - My flight has **NOT** appeared on eCrew **24 hours after the flight concluded**.\n"
+            "> - I have another **Flight Logging Dispute**.\n\n"
+            "If you wish to continue with this request, please reply **\"Yes\"** below.\n\n"
+            "Otherwise, please state your new enquiry or reply **\"close\"** to close this request.",
+        )
+        self._intake_collecting = True
+
+    async def handle_flightnotlogged_confirmation(self, message) -> bool:
+        """Handle Yes/Close/new-enquiry while the flightnotlogged alias is paused."""
+        pending = self._pending_flightnotlogged_confirmation
+        if not pending:
+            return False
+        message_text = build_ticket_text(message).strip()
+        normalized = " ".join(re.findall(r"[a-z0-9']+", message_text.casefold()))
+        if normalized in {"yes", "yes please", "yeah", "yep", "continue", "proceed"}:
+            decision = "yes"
+        elif normalized in {"close", "close it", "close ticket", "close the ticket"}:
+            decision = "close"
+        else:
+            api_key = self.bot.config.get("gemini_api_key", convert=False)
+            if api_key and self.bot.session is not None:
+                reviewer = GeminiFlightLogConfirmationClassifier(
+                    self.bot.session,
+                    str(api_key),
+                    model=AI_INTAKE_MODEL,
+                    timeout_seconds=20,
+                )
+                decision = await reviewer.classify_confirmation(message_text)
+            else:
+                decision = "new_inquiry"
+
+        self._pending_flightnotlogged_confirmation = None
+        if decision == "close":
+            await self.close(closer=self.bot.user)
+            return True
+        if decision != "yes":
+            # The recipient changed topic. Let the normal autoreply/intake workflow assess this
+            # exact message from scratch now that the confirmation gate has been cleared.
+            return False
+
+        display_name = pending["display_name"]
+        alias_action = pending["alias_action"]
+        autoreply_type = resolve_ai_autoreply_type(display_name, alias_action)
+        try:
+            claimed = await self.bot.api.claim_ai_autoreply(
+                self.channel.id,
+                autoreply_type,
+                display_name,
+            )
+        except Exception:
+            logger.exception("Could not claim confirmed flightnotlogged autoreply.")
+            await self.channel.send(
+                "The flight logging workflow could not be started automatically; awaiting an agent."
+            )
+            await self.channel.send("**You may now reply**")
+            return True
+        if not claimed:
+            return True
+
+        await self._execute_ai_alias(
+            display_name,
+            alias_action,
+            message,
+            form_fills=pending.get("form_fills"),
+        )
+        self._opening_autoreply_sent = True
+        actual_subscribers = self.bot.config["subscriptions"].get(str(self.id), [])
+        self._opening_alias_subscribed = bool(
+            actual_subscribers
+            or any(
+                step.strip().casefold().startswith("sub ")
+                for step in alias_action.get("steps", [])
+            )
+        )
+        if self._opening_alias_subscribed:
+            self._intake_collecting = False
+            self._intake_handed_to_agent = True
+            await self.channel.send("**You may now reply**")
+        return True
+
     async def run_ai_intake_workflow(
         self,
         message,
@@ -1349,6 +1461,33 @@ class Thread:
         selected_autoreply = result["selected_autoreply"]
         if selected_autoreply is not None:
             alias_action = alias_actions.get(selected_autoreply)
+            if self._is_flightnotlogged_alias(alias_action):
+                if (
+                    self._opening_workflow_active or self._opening_intake_pending
+                ) and not self._opening_introduction_sent:
+                    await self._send_ai_autoreply(
+                        "Opening AI introduction",
+                        "Hello. I am an AI assistant and I will be helping you today.",
+                        author_name="AI assistant",
+                        footer_text=AI_HELLO_FOOTER,
+                    )
+                    self._opening_introduction_sent = True
+                await self._request_flightnotlogged_confirmation(
+                    selected_autoreply,
+                    alias_action,
+                    autoreplies[selected_autoreply],
+                    message,
+                    form_fills=result["form_fills"],
+                )
+                await self._log_ai_check(
+                    message,
+                    current_text,
+                    outcome="confirmation_required",
+                    detail="The flightnotlogged alias is awaiting recipient confirmation.",
+                    selected_name=selected_autoreply,
+                    delivery_status="Eligibility confirmation sent; alias actions deferred.",
+                )
+                return
             autoreply_type = resolve_ai_autoreply_type(selected_autoreply, alias_action)
             try:
                 claimed = await self.bot.api.claim_ai_autoreply(
@@ -2178,6 +2317,33 @@ class Thread:
         delivery_error = None
         if selected is not None:
             alias_action = alias_actions.get(selected)
+            if self._is_flightnotlogged_alias(alias_action):
+                if (
+                    self._opening_workflow_active or self._opening_intake_pending
+                ) and not self._opening_introduction_sent:
+                    await self._send_ai_autoreply(
+                        "Opening AI introduction",
+                        "Hello. I am an AI assistant and I will be helping you today.",
+                        author_name="AI assistant",
+                        footer_text=AI_HELLO_FOOTER,
+                    )
+                    self._opening_introduction_sent = True
+                await self._request_flightnotlogged_confirmation(
+                    selected,
+                    alias_action,
+                    response_text,
+                    message,
+                    form_fills=reviewer.last_form_fills,
+                )
+                await self._log_ai_check(
+                    message,
+                    ticket_text,
+                    outcome="confirmation_required",
+                    detail="The flightnotlogged alias is awaiting recipient confirmation.",
+                    selected_name=selected,
+                    delivery_status="Eligibility confirmation sent; alias actions deferred.",
+                )
+                return
             autoreply_type = resolve_ai_autoreply_type(selected, alias_action)
             try:
                 claimed = await self.bot.api.claim_ai_autoreply(

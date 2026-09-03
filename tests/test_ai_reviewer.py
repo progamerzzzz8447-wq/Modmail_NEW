@@ -20,6 +20,7 @@ from core.ai_reviewer import (
     GeminiAutoReplyReviewer,
     GeminiContinuousTestReplyGenerator,
     GeminiFormAutofill,
+    GeminiFlightLogConfirmationClassifier,
     GeminiHelpfulReplyGenerator,
     GeminiIntakeAssessment,
     GeminiTicketChannelSummaryGenerator,
@@ -505,6 +506,34 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(result)
         self.assertIsNone(result["selected_autoreply"])
+
+    async def test_flight_log_confirmation_classifier_returns_structured_decision(self):
+        session = FakeSession(
+            FakeResponse(200, generate_content_output({"decision": "yes"}))
+        )
+        classifier = GeminiFlightLogConfirmationClassifier(
+            session, "key", model="gemini-3.5-flash-lite"
+        )
+
+        decision = await classifier.classify_confirmation(
+            "Yes, my flight still is not visible after 24 hours."
+        )
+
+        self.assertEqual(decision, "yes")
+        self.assertEqual(classifier.last_outcome, "classified")
+        config = session.request[1]["json"]["generationConfig"]
+        self.assertEqual(config["responseSchema"]["properties"]["decision"]["enum"], [
+            "yes", "close", "new_inquiry"
+        ])
+
+    async def test_flight_log_confirmation_classifier_fails_safe_to_new_inquiry(self):
+        classifier = GeminiFlightLogConfirmationClassifier(
+            FakeSession(FakeResponse(500, {})), "key"
+        )
+
+        decision = await classifier.classify_confirmation("Help with something else")
+
+        self.assertEqual(decision, "new_inquiry")
 
     def test_decodes_utf8_text_attachment_for_aireply(self):
         self.assertEqual(

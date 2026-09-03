@@ -123,6 +123,11 @@ class Modmail(commands.Cog):
                     self._ai_test_threads.discard(key)
             return
 
+        # A flightnotlogged selection is a two-stage workflow. Its confirmation must be handled
+        # before opening-window, subscription, test-mode, or ordinary autoreply routing.
+        if await thread.handle_flightnotlogged_confirmation(message):
+            return
+
         # Messages sent during the opening observation window are already relayed live and included
         # in its combined AI context. This guard must run before continuous test mode so ?aitest
         # cannot race the opening sequence and send an alias before the AI introduction.
