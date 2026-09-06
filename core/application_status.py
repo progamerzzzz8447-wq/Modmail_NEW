@@ -10,6 +10,7 @@ from core.application_reading import application_reading_reply
 
 LOOKUP_URL = "https://tui-academy.vercel.app/api/tom-lookup"
 STATUS_MARKER = "[APPLICATION_STATUS]"
+TOM_CODE_MARKER = "[APPLICATION_TOM_CODE]"
 logger = logging.getLogger(__name__)
 DM_GUIDANCE = "Please check your DMs from **TUI | Careers#9460** for your result and further information."
 OUTCOME_UNAVAILABLE = (
@@ -84,7 +85,8 @@ async def application_status_reply(bot, recipient):
     return "Hi, thanks for getting in touch!\n\n" + reply
 
 
-async def _application_status_reply(bot, recipient):
+async def lookup_application(bot, recipient):
+    """Return the recipient's record, or a safe user-facing lookup failure."""
     username = getattr(recipient, "name", None)
     if not username:
         return "I couldn't identify the ticket owner's Discord account. Please ask a member of staff to check your application."
@@ -107,7 +109,30 @@ async def _application_status_reply(bot, recipient):
         # Never log headers, credentials or the applicant's response body.
         logger.warning("Application lookup could not be completed")
         return "The application checker is temporarily unavailable. Please try again shortly or ask a member of staff."
-    if not isinstance(record, dict) or not isinstance(record.get("status"), str):
+    if not isinstance(record, dict):
+        return "I couldn't read your application record. Please reply here so Training & Recruitment can help you check."
+    return record
+
+
+async def application_tom_code_reply(bot, recipient):
+    record = await lookup_application(bot, recipient)
+    greeting = "Hi, thanks for getting in touch!\n\n"
+    if isinstance(record, str):
+        return greeting + record
+    code = record.get("tomCode")
+    if not isinstance(code, str) or not re.fullmatch(r"TOM-\d{1,20}", code):
+        return greeting + "I found your application, but couldn't retrieve a valid TOM code. Please reply here so Training & Recruitment can help you recover it."
+    return (
+        greeting + f"Your TOM code is **{code}**.\n\n"
+        "If the portal doesn't recognise this code, let us know here so the team can check your access."
+    )
+
+
+async def _application_status_reply(bot, recipient):
+    record = await lookup_application(bot, recipient)
+    if isinstance(record, str):
+        return record
+    if not isinstance(record.get("status"), str):
         return "I couldn't read a clear application status from the system. A member of Training & Recruitment will need to check it."
     status = known_status(record["status"])
     if status is None:

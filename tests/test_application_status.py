@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from core.application_reading import describe_dynamic_reply, expand_application_reading
-from core.application_status import application_status_reply, classify_unknown_status, known_status
+from core.application_status import application_status_reply, application_tom_code_reply, classify_unknown_status, known_status
 
 
 class Response:
@@ -108,3 +108,26 @@ class StatusTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(known_status('UNDER_REVIEW'),'reviewing')
         self.assertIsNone(known_status('not accepted'))
         self.assertIn('receipt',describe_dynamic_reply('[APPLICATION_STATUS]'))
+
+    async def test_forgotten_code_does_not_require_status_or_ai(self):
+        bot=self.bot()
+        bot.session.response.data={'tomCode':'TOM-363673'}
+        with patch.dict(os.environ,TOM_LOOKUP_API_KEY='test-only-key'):
+            reply=await application_tom_code_reply(bot,SimpleNamespace(name='actual_recipient'))
+        self.assertIn('Your TOM code is **TOM-363673**',reply)
+        self.assertEqual(len(bot.session.calls),1)
+        self.assertEqual(bot.session.calls[0][1]['json'],{'discordUsername':'actual_recipient'})
+
+    async def test_invalid_code_is_not_displayed(self):
+        bot=self.bot()
+        bot.session.response.data={'tomCode':'@everyone untrusted'}
+        with patch.dict(os.environ,TOM_LOOKUP_API_KEY='test-only-key'):
+            reply=await application_tom_code_reply(bot,SimpleNamespace(name='actual_recipient'))
+        self.assertNotIn('@everyone',reply)
+        self.assertIn("couldn't retrieve a valid TOM code",reply)
+
+    async def test_tom_marker_passes_ticket_owner(self):
+        recipient=SimpleNamespace(name='owner')
+        with patch('core.application_status.application_tom_code_reply',new=AsyncMock(return_value='CODE')) as lookup:
+            self.assertEqual(await expand_application_reading(None,'[APPLICATION_TOM_CODE]',recipient=recipient),'CODE')
+        lookup.assert_awaited_once_with(None,recipient)

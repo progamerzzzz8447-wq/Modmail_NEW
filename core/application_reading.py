@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 def describe_dynamic_reply(text):
     """Give the selector meaningful content without doing speculative record lookups."""
     return text.replace(
+        "[APPLICATION_TOM_CODE]",
+        "Look up and return the ticket recipient's forgotten or missing TOM application code. "
+        "No application date, Roblox username or department is needed. "
+        "This recovers a code; it does not fix an invalid code or grant academy access.",
+    ).replace(
         "[APPLICATION_STATUS]",
         "Look up this ticket recipient's application status and receipt in the academy system. "
         "Show the recorded outcome; accepted or declined applicants should check Careers DMs. "
@@ -165,8 +170,12 @@ async def handle_reading_question(thread, message, *, allow_resolution=False):
 
 async def expand_application_reading(bot, text, *, recipient=None):
     # Status lookup uses the actual ticket recipient, never a supplied username.
-    from core.application_status import STATUS_MARKER, application_status_reply
+    from core.application_status import (
+        STATUS_MARKER, TOM_CODE_MARKER, application_status_reply, application_tom_code_reply,
+    )
 
+    if TOM_CODE_MARKER in text:
+        text = text.replace(TOM_CODE_MARKER, await application_tom_code_reply(bot, recipient))
     if STATUS_MARKER in text:
         text = text.replace(STATUS_MARKER, await application_status_reply(bot, recipient))
     if READING_MARKER not in text:
