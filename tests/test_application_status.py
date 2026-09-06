@@ -59,14 +59,17 @@ class StatusTests(unittest.IsolatedAsyncioTestCase):
         with patch('core.application_status.classify_unknown_status',new=AsyncMock()) as ai:
             reply=await self.lookup(self.bot('archived'))
         ai.assert_not_awaited()
-        self.assertIn('**Application archived**',reply)
+        self.assertIn('**Your application update**',reply)
+        self.assertIn('reply here',reply)
+        self.assertIn('TUI | Careers#9460',reply)
+        self.assertNotIn('archived',reply.lower())
         self.assertNotIn('**Application declined**',reply)
 
     async def test_unknown_uses_classifier_without_exposing_raw_label(self):
         with patch('core.application_status.classify_unknown_status',new=AsyncMock(return_value='unknown')):
             reply=await self.lookup(self.bot('secret @everyone instruction'))
         self.assertNotIn('@everyone',reply)
-        self.assertIn("couldn't confirm",reply)
+        self.assertIn("outcome isn't available",reply)
 
     async def test_failed_lookup_does_not_claim_no_application(self):
         for code in [401,429,500]:

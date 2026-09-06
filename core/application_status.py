@@ -12,6 +12,13 @@ LOOKUP_URL = "https://tui-academy.vercel.app/api/tom-lookup"
 STATUS_MARKER = "[APPLICATION_STATUS]"
 logger = logging.getLogger(__name__)
 DM_GUIDANCE = "Please check your DMs from **TUI | Careers#9460** for your result and further information."
+OUTCOME_UNAVAILABLE = (
+    "**Your application update**\n\n"
+    "Your application is on record, but its outcome isn't available through this check.\n\n"
+    "Please check your DMs from **TUI | Careers#9460** for your result. "
+    "If you haven't received a result, reply here so our Training & Recruitment team "
+    "can help you check."
+)
 KNOWN_STATUSES = {
     "accepted": "accepted", "approved": "accepted", "successful": "accepted", "passed": "accepted",
     "denied": "denied", "declined": "denied", "rejected": "denied", "unsuccessful": "denied", "failed": "denied",
@@ -110,7 +117,9 @@ async def application_status_reply(bot, recipient):
     if status == "reviewing":
         return f"**Application under review**{reference}\n\nYour application is being reviewed. {DM_GUIDANCE}"
     if status == "archived":
-        return f"**Application archived**{reference}\n\nThe system marks this application as archived. That does not tell me whether it was accepted or declined. Please ask Training & Recruitment to check."
+        reference_note = f"\n\n**Application reference:** `{code}`" if reference else ""
+        return OUTCOME_UNAVAILABLE + reference_note
     if status == "withdrawn":
         return f"**Application withdrawn or cancelled**{reference}\n\nIf this is unexpected, please ask Training & Recruitment to check before submitting again."
-    return "I found an application, but couldn't confirm what its status means. Please ask Training & Recruitment to check it."
+    reference_note = f"\n\n**Application reference:** `{code}`" if reference else ""
+    return OUTCOME_UNAVAILABLE + reference_note
