@@ -1471,7 +1471,9 @@ class Thread:
             return
         autoreplies = {}
         alias_actions = {}
-        if not autoreply_only and not is_acknowledgement_only(current_text):
+        if not autoreply_only and (
+            not is_acknowledgement_only(current_text) or self._intake_collecting
+        ):
             autoreplies, alias_actions, _ = self._resolve_ai_autoreplies(
                 current_text,
                 require_trigger=False,
@@ -1520,6 +1522,10 @@ class Thread:
             autoreply_sent=self._opening_autoreply_sent,
             questions_asked=intake_questions_asked,
             autoreply_catalog=autoreply_catalog,
+            autoreply_guidance={
+                name: action.get("additional_info", "")
+                for name, action in alias_actions.items()
+            },
             autoreply_forms=autoreply_forms,
             trigger_matched_autoreplies=trigger_matched_autoreplies,
             trusted_recipient_username=str(

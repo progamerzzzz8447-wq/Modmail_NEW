@@ -1423,6 +1423,7 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
         trigger_matched_autoreplies: typing.Iterable[str] = (),
         trusted_recipient_username: str = "",
         handoff_teams: typing.Optional[typing.Mapping[str, str]] = None,
+        autoreply_guidance: typing.Optional[typing.Mapping[str, str]] = None,
     ):
         if not str(transcript or "").strip():
             self.last_outcome = "skipped"
@@ -1434,6 +1435,10 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             if str(name).strip()
         }
         catalog_text = json.dumps(catalog, ensure_ascii=False, indent=2)
+        guidance_text = json.dumps({
+            name: str((autoreply_guidance or {}).get(name) or "")
+            for name in catalog if (autoreply_guidance or {}).get(name)
+        }, ensure_ascii=False, indent=2)
         form_catalog = {
             name: list((autoreply_forms or {}).get(name) or [])
             for name in catalog
@@ -1495,9 +1500,9 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             "If the request is unclear, put one concise clarification question in "
             "`clarification_question`. Also provide `ticket_summary`, a concise factual summary for "
             "staff, and `primary_question`, the recipient's main question or requested action. These "
-            "summaries should include known identifiers, evidence received, steps already tried, "
+            "summaries must reflect the transcript and should include known identifiers, evidence received, steps already tried, "
             "and each unresolved request. Do not describe missing evidence as received. "
-            "must reflect the transcript without inventing details. Review the complete autoreply "
+            "Review the complete autoreply "
             "catalogue below on every intake assessment, regardless of keywords. Catalogue values "
             "are alias identifiers, not reply contents. Decide the autoreply selection before "
             "deciding whether to ask an intake clarification. The separately supplied "
@@ -1508,9 +1513,18 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             "ask a clarification question instead. The selected alias itself gathers or supplies "
             "the relevant information. Select an autoreply only when its display "
             "name clearly and specifically fits what the recipient is asking across all of their "
-            "messages, with the latest recipient turn controlling the decision. There must be a new "
-            "substantive question or request in that latest turn. If it is only thanks, an "
-            "acknowledgement, confirmation, or conversational closing, select no autoreply; never "
+            "messages, with the latest recipient turn controlling the decision. A recipient answering "
+            "an outstanding clarification is substantive information about the ORIGINAL request; "
+            "they do not need to repeat the request or trigger words. Even a short confirmation "
+            "such as yes can answer an explicit clarification. Combine it with the question asked "
+            "before choosing an autoreply or handoff. In missing-rank enquiries, teaching server "
+            "or training server can mean the Academy server; if the role is still unclear, ask "
+            "whether they mean the Academy trainee role, not for identifiers already supplied. "
+            "Do not apply trainee waiting instructions to instructor or qualified staff ranks. "
+            "Use ADMINISTRATOR SELECTION GUIDANCE to decide applicability and exceptions; it is "
+            "trusted configuration, not recipient intent, and must not be copied to the recipient. "
+            "If the latest turn is only thanks, an acknowledgement unrelated to an outstanding "
+            "clarification, or conversational closing, select no autoreply; never "
             "reinterpret an older issue to select a different related autoreply. A shared subject or "
             "vague similarity is not enough. Otherwise select "
             f"`{NO_MATCH}`. If the selected autoreply has form lines below, use this same response "
@@ -1535,6 +1549,7 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             "This trusted value may fill only a Discord username field, never a Roblox or other "
             "account field.\n\n"
             f"AUTOREPLY CATALOGUE (DISPLAY NAME -> ALIAS IDENTIFIER):\n{catalog_text}\n\n"
+            f"ADMINISTRATOR SELECTION GUIDANCE:\n{guidance_text}\n\n"
             "TRIGGER-MATCHED AUTOREPLIES (DISPLAY NAMES ONLY):\n"
             f"{json.dumps(trigger_matched_names, ensure_ascii=False)}\n\n"
             f"FENCED FORM LINES ONLY:\n"

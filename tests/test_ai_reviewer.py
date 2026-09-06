@@ -379,6 +379,7 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
             autoreply_sent=True,
             questions_asked=3,
             autoreply_catalog={"Payment timing": "payment-alias"},
+            autoreply_guidance={"Payment timing": "Never promise payment before staff approval."},
             autoreply_forms={
                 "Payment timing": [
                     {"field_id": "field_1", "label": "What did you purchase"}
@@ -416,10 +417,13 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("MUST select it immediately", prompt)
         self.assertIn("TRUSTED RECIPIENT DISCORD USERNAME: ticket_writer", prompt)
         self.assertIn("For disciplinary appeals", prompt)
-        self.assertIn("There must be a new substantive question", prompt)
+        self.assertIn("they do not need to repeat the request or trigger words", prompt)
         self.assertIn("`TRUSTED AI FEED`", prompt)
         self.assertIn("do not treat them as recipient intent", prompt)
         self.assertIn("SMART HANDOFF TEAMS", prompt)
+        self.assertIn("Never promise payment before staff approval.", prompt)
+        self.assertIn("outstanding clarification is substantive information", prompt)
+        self.assertIn("Academy trainee role", prompt)
         self.assertIn("Use General Support Staff", prompt)
         self.assertNotIn("Use the application form", prompt)
 
