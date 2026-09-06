@@ -80,6 +80,11 @@ async def classify_unknown_status(bot, value):
 
 
 async def application_status_reply(bot, recipient):
+    reply = await _application_status_reply(bot, recipient)
+    return "Hi, thanks for getting in touch!\n\n" + reply
+
+
+async def _application_status_reply(bot, recipient):
     username = getattr(recipient, "name", None)
     if not username:
         return "I couldn't identify the ticket owner's Discord account. Please ask a member of staff to check your application."
@@ -108,18 +113,23 @@ async def application_status_reply(bot, recipient):
     if status is None:
         status = await classify_unknown_status(bot, record["status"])
     code = record.get("tomCode", "")
-    reference = f"\nReference: **{code}**" if isinstance(code, str) and re.fullmatch(r"TOM-\d{1,20}", code) else ""
+    reference = f"\n\n**Application reference:** `{code}`" if isinstance(code, str) and re.fullmatch(r"TOM-\d{1,20}", code) else ""
     if status in {"accepted", "denied"}:
-        title = "accepted" if status == "accepted" else "declined"
-        return f"**Application {title}**{reference}\n\n{DM_GUIDANCE}"
+        outcome = (
+            "Good news — your application has been **accepted**!"
+            if status == "accepted" else
+            "Unfortunately, your application has been **declined**. Thank you for taking the time to apply."
+        )
+        return (
+            f"{outcome}\n\n{DM_GUIDANCE}\n\n"
+            f"If you can't find the message, let us know here and we can help you with the next step.{reference}"
+        )
     if status == "submitted":
-        return f"**Application received**{reference}\nYour application has been received and is awaiting review.\n\n{await application_reading_reply(bot)}"
+        return f"Your application has been received and is **awaiting review**.\n\n{await application_reading_reply(bot)}{reference}"
     if status == "reviewing":
-        return f"**Application under review**{reference}\n\nYour application is being reviewed. {DM_GUIDANCE}"
+        return f"Your application is **currently being reviewed**.\n\nPlease keep an eye on your DMs from **TUI | Careers#9460** for your result. Thank you for your patience while the team reviews your application.{reference}"
     if status == "archived":
-        reference_note = f"\n\n**Application reference:** `{code}`" if reference else ""
-        return OUTCOME_UNAVAILABLE + reference_note
+        return OUTCOME_UNAVAILABLE + reference
     if status == "withdrawn":
-        return f"**Application withdrawn or cancelled**{reference}\n\nIf this is unexpected, please ask Training & Recruitment to check before submitting again."
-    reference_note = f"\n\n**Application reference:** `{code}`" if reference else ""
-    return OUTCOME_UNAVAILABLE + reference_note
+        return f"Your application is recorded as **withdrawn or cancelled**.\n\nIf you weren't expecting this, let us know here so Training & Recruitment can check before you submit another application.{reference}"
+    return OUTCOME_UNAVAILABLE + reference

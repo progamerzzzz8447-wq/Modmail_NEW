@@ -37,7 +37,7 @@ class StatusTests(unittest.IsolatedAsyncioTestCase):
     async def test_accepted_uses_recipient_and_dm_guidance(self):
         bot=self.bot('accepted')
         reply=await self.lookup(bot)
-        self.assertIn('**Application accepted**',reply)
+        self.assertIn('application has been **accepted**',reply)
         self.assertIn('TUI | Careers#9460',reply)
         request=bot.session.calls[0][1]
         self.assertEqual(request['json'],{'discordUsername':'actual_recipient'})
@@ -46,7 +46,9 @@ class StatusTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_declined(self):
         reply=await self.lookup(self.bot('rejected'))
-        self.assertIn('**Application declined**',reply)
+        self.assertIn('Unfortunately, your application has been **declined**',reply)
+        self.assertTrue(reply.startswith('Hi, thanks for getting in touch!\n\n'))
+        self.assertTrue(reply.endswith('**Application reference:** `TOM-12345`'))
         self.assertIn('TUI | Careers#9460',reply)
 
     async def test_submitted_includes_schedule(self):
