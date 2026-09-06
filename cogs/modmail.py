@@ -2579,6 +2579,17 @@ class Modmail(commands.Cog):
         async with safe_typing(ctx):
             await ctx.thread.reply(ctx.message, msg)
 
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    async def applicationreading(self, ctx):
+        """Preview the live Careers reading schedule in this channel (does not DM the user)."""
+        from core.application_reading import application_reading_reply
+
+        await ctx.send(
+            await application_reading_reply(self.bot),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
     @commands.command(name="sr", usage="<USER> <MESSAGE>")
     @checks.has_user_id(1458951643377963178, 811638993695408180)
     @checks.thread_only()

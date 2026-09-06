@@ -35,7 +35,7 @@ AI_INTAKE_HANDOFF = (
     "Thank you. I've gathered the available information and handed this ticket over to the "
     "appropriate team. Please await a response from a member of staff."
 )
-AI_INTAKE_MAX_QUESTIONS = 5
+AI_INTAKE_MAX_QUESTIONS = 2
 AI_ACKNOWLEDGEMENT_TRIGGERS = (
     "ok",
     "okay",
@@ -1129,6 +1129,9 @@ class GeminiAutoReplyReviewer:
             "Use its name as additional context about the intended action, but do not select it "
             "on the alias name alone. Judge whether the alias and its complete `set_message` "
             "together are a sensible response to what the recipient is actually asking. "
+            "Distinguish SQ instructors from STO instructors, missing application outcomes from "
+            "accepted applicants awaiting roles, and eligibility questions from requests to apply. "
+            "A correction such as 'SQ, not STO' rules out the rejected interpretation. "
             "Select an autoreply only when it directly and clearly answers the recipient's "
             "explicit intent. A shared topic word is never sufficient evidence: the recipient "
             "must actually request the action, process, or information that the set message "
@@ -1467,6 +1470,9 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             "non-essential follow-up details themselves. When uncertain whether another detail is "
             "essential, prefer setting `clear` true and handing over. "
             "There is no minimum number of questions: set `clear` true immediately when the ticket "
+            "requests a human agent; choose no autoreply and do not require further intake first. "
+            "A human request does not grant a request for a specific senior person. Otherwise, "
+            "set `clear` true immediately when the ticket "
             "already contains enough information. When important information is missing, set "
             "`clear` false and ask exactly one concise, context-sensitive next question in "
             "`clarification_question`. Collect information progressively; do not ask again for "
@@ -1489,6 +1495,8 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
             "If the request is unclear, put one concise clarification question in "
             "`clarification_question`. Also provide `ticket_summary`, a concise factual summary for "
             "staff, and `primary_question`, the recipient's main question or requested action. These "
+            "summaries should include known identifiers, evidence received, steps already tried, "
+            "and each unresolved request. Do not describe missing evidence as received. "
             "must reflect the transcript without inventing details. Review the complete autoreply "
             "catalogue below on every intake assessment, regardless of keywords. Catalogue values "
             "are alias identifiers, not reply contents. Decide the autoreply selection before "
@@ -1680,6 +1688,10 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
                 for item in (result.get("remaining_inquiries") or [])
                 if str(item).strip()
             ][:10]
+            # An outstanding request must not trigger the resolved/closure branch, even if
+            # the model returns contradictory flags for a ticket with multiple issues.
+            if remaining:
+                resolved = False
             clarification = str(result.get("clarification_question") or "").strip()[:500]
             ticket_summary = str(result.get("ticket_summary") or "").strip()[:1000]
             primary_question = str(result.get("primary_question") or "").strip()[:500]

@@ -263,9 +263,9 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**closed automatically**", AI_TICKET_CLOSED_MESSAGE)
         self.assertIn("a **new ticket will automatically be created**", AI_TICKET_CLOSED_MESSAGE)
 
-    def test_intake_greeting_and_durable_five_question_cap(self):
+    def test_intake_greeting_and_durable_two_question_cap(self):
         self.assertIn("Please tell me why you're opening a ticket", AI_INTAKE_GREETING)
-        self.assertEqual(AI_INTAKE_MAX_QUESTIONS, 5)
+        self.assertEqual(AI_INTAKE_MAX_QUESTIONS, 2)
         messages = [
             {
                 "author": {"id": "999", "mod": True},
@@ -422,6 +422,21 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("SMART HANDOFF TEAMS", prompt)
         self.assertIn("Use General Support Staff", prompt)
         self.assertNotIn("Use the application form", prompt)
+
+    async def test_intake_cannot_resolve_ticket_with_outstanding_request(self):
+        session = FakeSession(FakeResponse(200, generate_content_output({
+            "clear": True,
+            "resolved": True,
+            "remaining_inquiries": ["Review the separate infraction appeal"],
+            "selected_autoreply": NO_MATCH,
+        })))
+        result = await GeminiIntakeAssessment(session, "key").assess(
+            "The warning is removed, but my infraction appeal is still outstanding.",
+            autoreply_sent=True,
+        )
+        self.assertFalse(result["resolved"])
+        self.assertTrue(result["clear"])
+        self.assertEqual(result["remaining_inquiries"], ["Review the separate infraction appeal"])
 
     async def test_intake_assessment_retries_transient_failure_with_longer_timeout(self):
         assessment = {

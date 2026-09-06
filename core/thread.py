@@ -916,6 +916,9 @@ class Thread:
         footer_text: str = AI_REPLY_FOOTER,
     ) -> None:
         """Deliver a configured AI-selected reply and preserve it in the ticket log."""
+        from core.application_reading import expand_application_reading
+
+        response_text = await expand_application_reading(self.bot, response_text)
         joint_id = generate_ai_message_joint_id()
         response_text = normalize_generated_reply_layout(response_text)
         timestamp = discord.utils.utcnow()
@@ -3395,6 +3398,15 @@ class Thread:
         )
         if not trusted_system_reply:
             await self.ensure_staff_reply_subscription(author, message)
+
+        from core.application_reading import expand_application_reading
+
+        original_content = content if content is not None else message.content
+        content = await expand_application_reading(self.bot, original_content)
+        if content != original_content:
+            # Log the delivered schedule rather than the dynamic marker.
+            message = copy.copy(message)
+            message.content = content
 
         # If this thread was snoozed using move-behavior, unsnooze automatically when a mod replies
         try:
