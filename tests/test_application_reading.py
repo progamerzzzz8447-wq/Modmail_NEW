@@ -38,7 +38,7 @@ class ReadingTests(unittest.IsolatedAsyncioTestCase):
     async def test_future_schedule_and_disclaimer(self):
         reply=await application_reading_reply(self.bot('Next Scheduled Reading: 10/09/2026, 16:30'), now=datetime(2026,9,6,tzinfo=timezone.utc))
         self.assertIn('<t:1789054200:f>', reply)
-        self.assertIn('not a guaranteed result time', reply)
+        self.assertIn('This time is an estimate', reply)
 
     async def test_latest_cancelled_notice_does_not_resurrect_old_schedule(self):
         reply=await application_reading_reply(self.bot('Next Scheduled Reading: TBA', 'Next Scheduled Reading: 10/09/2026, 16:30'), now=datetime(2026,9,6,tzinfo=timezone.utc))

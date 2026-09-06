@@ -2590,6 +2590,15 @@ class Modmail(commands.Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+    @commands.command()
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    @checks.thread_only()
+    async def applicationstatus(self, ctx):
+        """Reply with the ticket recipient's application status; accepts no username."""
+        from core.application_status import STATUS_MARKER
+
+        await ctx.thread.reply(ctx.message, STATUS_MARKER)
+
     @commands.command(name="sr", usage="<USER> <MESSAGE>")
     @checks.has_user_id(1458951643377963178, 811638993695408180)
     @checks.thread_only()

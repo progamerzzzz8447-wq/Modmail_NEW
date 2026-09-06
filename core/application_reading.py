@@ -13,11 +13,24 @@ LABEL = re.compile(r"next\s+scheduled\s+reading\s*:\s*([^\n]*(?:\n[^\n]*)?)", re
 STAMP = re.compile(r"<t:(\d{9,12})(?::[tTdDfFRs])?>")
 DATE = re.compile(r"\b(\d{1,2}/\d{1,2}/\d{4}),?\s+(\d{1,2}:\d{2})\b")
 DISCLAIMER = (
-    "This is the scheduled application-reading batch, not a guaranteed result time. "
-    "The schedule may change, and your application may be reviewed in a later batch. "
-    "This does not confirm the status of your individual application."
+    "This time is an estimate. The schedule may change, and your result may arrive later."
 )
 logger = logging.getLogger(__name__)
+
+
+def describe_dynamic_reply(text):
+    """Give the selector meaningful content without doing speculative record lookups."""
+    return text.replace(
+        "[APPLICATION_STATUS]",
+        "Look up this ticket recipient's application status and receipt in the academy system. "
+        "Show the recorded outcome; accepted or declined applicants should check Careers DMs. "
+        "Submitted applications receive the next scheduled reading time. "
+        "If the record is missing, unavailable or unclear, explain that staff need to check.",
+    ).replace(
+        READING_MARKER,
+        "Read the next scheduled application-reading batch from the Careers channel and show "
+        "the published time with a reminder that results are not guaranteed at that time.",
+    )
 
 
 def schedule_timestamp(text):
@@ -82,12 +95,18 @@ async def application_reading_reply(bot, *, now=None):
             f"Please check [Careers]({CAREERS_URL}) for updates.\n\n{DISCLAIMER}"
         )
     return (
-        f"**Next Scheduled Reading:** <t:{timestamp}:f> (<t:{timestamp}:R>)\n\n"
-        f"{DISCLAIMER}\n\n[Check the Careers announcement]({CAREERS_URL})"
+        f"**Next application reading**\n<t:{timestamp}:f> · <t:{timestamp}:R>\n\n"
+        f"{DISCLAIMER}\n[View Careers updates]({CAREERS_URL})"
     )
 
 
-async def expand_application_reading(bot, text):
+async def expand_application_reading(bot, text, *, recipient=None):
+    # Status lookup uses the actual ticket recipient, never a supplied username.
+    from core.application_status import STATUS_MARKER, application_status_reply
+
+    if STATUS_MARKER in text:
+        text = text.replace(STATUS_MARKER, await application_status_reply(bot, recipient))
     if READING_MARKER not in text:
         return text
+    text = text.replace("Application review timing: ", "")
     return text.replace(READING_MARKER, await application_reading_reply(bot))

@@ -918,7 +918,7 @@ class Thread:
         """Deliver a configured AI-selected reply and preserve it in the ticket log."""
         from core.application_reading import expand_application_reading
 
-        response_text = await expand_application_reading(self.bot, response_text)
+        response_text = await expand_application_reading(self.bot, response_text, recipient=self.recipient)
         joint_id = generate_ai_message_joint_id()
         response_text = normalize_generated_reply_layout(response_text)
         timestamp = discord.utils.utcnow()
@@ -2069,7 +2069,9 @@ class Thread:
                                 recipient=self.recipient,
                                 author=self.bot.user,
                             )
-                        messages.append(response_text)
+                        from core.application_reading import describe_dynamic_reply
+
+                        messages.append(describe_dynamic_reply(response_text))
                 except Exception as exc:
                     errors.append(
                         f'Alias "{alias_name}" could not be formatted ({type(exc).__name__}).'
@@ -3402,7 +3404,7 @@ class Thread:
         from core.application_reading import expand_application_reading
 
         original_content = content if content is not None else message.content
-        content = await expand_application_reading(self.bot, original_content)
+        content = await expand_application_reading(self.bot, original_content, recipient=self.recipient)
         if content != original_content:
             # Log the delivered schedule rather than the dynamic marker.
             message = copy.copy(message)
