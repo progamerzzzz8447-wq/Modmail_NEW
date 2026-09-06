@@ -1166,6 +1166,11 @@ class Thread:
         if self.contains_abusive_message(message):
             return
 
+        from core.application_reading import handle_reading_question
+
+        if await handle_reading_question(self, message):
+            return
+
         async with self._ai_review_lock:
             # Preserve opening delivery state across every review hook until the opening workflow
             # finishes. A second check must not forget an alias already sent and then emit a late
@@ -1378,6 +1383,16 @@ class Thread:
         followup_revision: typing.Optional[int] = None,
     ) -> None:
         """Run autoreply selection followed by one clarity/resolution assessment."""
+        from core.application_reading import handle_reading_question
+
+        if await handle_reading_question(
+            self, message,
+            allow_resolution=(
+                opening or self._awaiting_initial_inquiry
+                or getattr(self, "_all_closure_alias_ran", False)
+            ),
+        ):
+            return
         if self._intake_handed_to_agent and not autoreply_only:
             return
         if self.bot.config["subscriptions"].get(str(self.id), []):

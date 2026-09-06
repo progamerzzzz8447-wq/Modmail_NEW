@@ -71,7 +71,7 @@ def message_schedule_text(message):
     return "\n".join(parts)
 
 
-async def application_reading_reply(bot, *, now=None):
+async def application_reading_result(bot, *, now=None):
     now = now or datetime.now(timezone.utc)
 
     async def read():
@@ -90,14 +90,77 @@ async def application_reading_reply(bot, *, now=None):
         logger.warning("Could not read the Careers application schedule", exc_info=True)
         timestamp = None
     if timestamp is None or timestamp <= now.timestamp():
-        return (
+        return False, (
             "I couldn't confirm a future application-reading time from the Careers channel. "
             f"Please check [Careers]({CAREERS_URL}) for updates.\n\n{DISCLAIMER}"
         )
-    return (
+    return True, (
         f"**Next application reading**\n<t:{timestamp}:f> · <t:{timestamp}:R>\n\n"
         f"{DISCLAIMER}\n[View Careers updates]({CAREERS_URL})"
     )
+
+
+async def application_reading_reply(bot, *, now=None):
+    _, text = await application_reading_result(bot, now=now)
+    return text
+
+
+def is_general_reading_question(text):
+    """Recognize a narrow, single-purpose schedule question, not a personal status lookup."""
+    words = re.findall(r"[a-z]+", str(text).lower())
+    allowed = set(
+        "hi hello hey guys please pls plz thanks thank you when what time date is are the "
+        "a an next application applications app apps reading readings read being be will "
+        "do does get getting scheduled batch batches going to know can i ask about "
+        "could would tell me kindly roughly approximately".split()
+    )
+    return bool(
+        words and set(words) <= allowed
+        and set(words) & {"application", "applications", "app", "apps"}
+        and set(words) & {"reading", "readings", "read"}
+        and set(words) & {"when", "next", "time", "date"}
+    )
+
+
+async def handle_reading_question(thread, message, *, allow_resolution=False):
+    """Answer schedule-only requests independently of model selection and alias group claims."""
+    if not thread.bot.config.get("gemini_ai_enabled"):
+        return False
+    if getattr(message, "attachments", None) or not is_general_reading_question(getattr(message, "content", "")):
+        return False
+    message_id = getattr(message, "id", None)
+    if message_id is None:
+        return False
+    try:
+        claimed = await thread.bot.api.claim_ai_autoreply(
+            thread.channel.id, f"system:application-reading:{message_id}",
+            "Next application reading",
+        )
+    except Exception:
+        logger.warning("Application reading duplicate guard unavailable")
+        await thread.channel.send("Application schedule check unavailable; awaiting an agent.")
+        return True
+    if not claimed:
+        return True
+    revision = getattr(thread, "_followup_revision", 0)
+    confirmed, reply = await application_reading_result(thread.bot)
+    await thread._send_ai_autoreply("Next application reading", reply)
+    # A confirmed answer resolves this standalone inquiry. Do not reclassify it five
+    # minutes later or mark unrelated earlier issues/subscribed tickets resolved.
+    subscribed = thread.bot.config["subscriptions"].get(str(thread.id), [])
+    new_message = (
+        revision != getattr(thread, "_followup_revision", 0)
+        or getattr(thread, "_pending_followup_message", None) is not None
+    )
+    if confirmed and allow_resolution and not subscribed and not new_message:
+        thread._opening_autoreply_sent = True
+        thread._intake_collecting = False
+        thread._intake_handed_to_agent = True
+        thread._awaiting_initial_inquiry = False
+        await thread._run_automatic_aiall()
+    elif not confirmed:
+        await thread.channel.send("No future application reading could be confirmed; staff review is needed.")
+    return True
 
 
 async def expand_application_reading(bot, text, *, recipient=None):
