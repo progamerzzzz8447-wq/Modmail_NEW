@@ -2545,7 +2545,10 @@ class Thread:
         form_fills: typing.Optional[typing.Mapping[str, str]] = None,
     ) -> None:
         """Execute every alias step in order while preserving the AI footer on replies."""
-        if str(alias_action.get("alias") or "").strip().casefold() == "subqual":
+        if str(alias_action.get("alias") or "").strip().casefold() in {
+            "subqual",
+            "subqualification",
+        }:
             self._pending_subqual_request = {
                 "YOUR DISCORD USERNAME": str(getattr(self.recipient, "name", "") or "").strip()
             }

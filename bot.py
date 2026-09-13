@@ -1587,7 +1587,8 @@ class ModmailBot(commands.Bot):
                 if (
                     thread is not None
                     and not getattr(ctx, "command_failed", False)
-                    and getattr(ctx, "_manual_alias_name", "").casefold() == "subqual"
+                    and getattr(ctx, "_manual_alias_name", "").casefold()
+                    in {"subqual", "subqualification"}
                 ):
                     thread.begin_subqual_request()
                 continue
