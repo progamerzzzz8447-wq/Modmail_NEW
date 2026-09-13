@@ -2203,6 +2203,7 @@ class Thread:
             "discordId": str(self.id),
             "position": position,
         }
+        provisioning_stage = "portal account creation"
         try:
             async with self.bot.session.post(
                 SUBQUAL_TRAINEE_URL,
@@ -2216,17 +2217,30 @@ class Thread:
                 trainee = await response.json()
             if not isinstance(trainee, Mapping):
                 raise ValueError("Internal trainee API returned an invalid response")
-            tom_code = trainee.get("tomCode") or trainee.get("tom_code") or trainee.get("code")
+            credential_source = trainee
+            for container_name in ("trainee", "data", "user", "credentials", "result"):
+                nested = trainee.get(container_name)
+                if isinstance(nested, Mapping):
+                    credential_source = nested
+                    break
+            tom_code = (
+                credential_source.get("tomCode")
+                or credential_source.get("tom_code")
+                or credential_source.get("tom")
+                or credential_source.get("code")
+            )
             password = (
-                trainee.get("password")
-                or trainee.get("temporaryPassword")
-                or trainee.get("temporary_password")
+                credential_source.get("password")
+                or credential_source.get("temporaryPassword")
+                or credential_source.get("temporary_password")
+                or credential_source.get("tempPassword")
             )
             if not isinstance(tom_code, str) or not tom_code.strip():
                 raise ValueError("Internal trainee API did not return a TOM code")
             if not isinstance(password, str) or not password.strip():
                 raise ValueError("Internal trainee API did not return a password")
 
+            provisioning_stage = "one-use Academy invite creation"
             academy_guild = self.bot.get_guild(SUBQUAL_ACADEMY_GUILD_ID)
             if academy_guild is None:
                 academy_guild = await self.bot.fetch_guild(SUBQUAL_ACADEMY_GUILD_ID)
@@ -2244,11 +2258,6 @@ class Thread:
                     channel
                     for channel in await academy_guild.fetch_channels()
                     if hasattr(channel, "create_invite")
-                )
-            if not invite_channels and hasattr(academy_guild, "fetch_channels"):
-                fetched_channels = await academy_guild.fetch_channels()
-                invite_channels.extend(
-                    channel for channel in fetched_channels if hasattr(channel, "create_invite")
                 )
             invite = None
             for invite_channel in invite_channels:
@@ -2275,12 +2284,12 @@ class Thread:
             await self._send_ai_autoreply(
                 "Sub-qualification provisioning review",
                 "Your request passed the automatic eligibility checks, but I couldn't complete "
-                "the Academy setup. A member of Training & Recruitment has been requested to "
-                "complete it manually.",
+                f"the {provisioning_stage}. A member of Training & Recruitment has been requested "
+                "to complete it manually.",
             )
             await self._send_smart_intake_handoff(
                 result,
-                "**Sub-qualification:** Eligible request; portal or invite provisioning failed.",
+                f"**Sub-qualification:** Eligible request; {provisioning_stage} failed.",
             )
             return True
 
