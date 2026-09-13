@@ -97,6 +97,19 @@ class StatusTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result,'STATUS')
         lookup.assert_awaited_once_with(None,recipient)
 
+    async def test_missing_status_marks_thread_for_username_retry(self):
+        bot = self.bot(http=404)
+        thread = SimpleNamespace(_pending_application_username_check=False)
+        with patch.dict(os.environ, TOM_LOOKUP_API_KEY='test-only-key'):
+            result = await expand_application_reading(
+                bot,
+                '[APPLICATION_STATUS]',
+                recipient=SimpleNamespace(name='ticket_owner'),
+                thread=thread,
+            )
+        self.assertTrue(thread._pending_application_username_check)
+        self.assertIn('reply with the Discord username', result)
+
     async def test_ai_status_label_request_omits_personal_details(self):
         data={'candidates':[{'content':{'parts':[{'text':'{"category":"accepted","explicit":true}'}]}}]}
         bot=SimpleNamespace(session=Session(Response(data=data)),config=Config(gemini_api_key='test',gemini_model='gemini-test'))

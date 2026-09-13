@@ -20,6 +20,11 @@ OUTCOME_UNAVAILABLE = (
     "If you haven't received a result, reply here so our Training & Recruitment team "
     "can help you check."
 )
+APPLICATION_NOT_FOUND = object()
+NOT_FOUND_REPLY = (
+    "I couldn't find an application linked to your current Discord username. "
+    "Please reply with the Discord username you used on the application and I'll check again."
+)
 KNOWN_STATUSES = {
     "accepted": "accepted", "approved": "accepted", "successful": "accepted", "passed": "accepted",
     "denied": "denied", "declined": "denied", "rejected": "denied", "unsuccessful": "denied", "failed": "denied",
@@ -85,9 +90,9 @@ async def application_status_reply(bot, recipient):
     return "Hi, thanks for getting in touch!\n\n" + reply
 
 
-async def lookup_application(bot, recipient):
+async def lookup_application(bot, recipient=None, *, username=None):
     """Return the recipient's record, or a safe user-facing lookup failure."""
-    username = getattr(recipient, "name", None)
+    username = username or getattr(recipient, "name", None)
     if not username:
         return "I couldn't identify the ticket owner's Discord account. Please ask a member of staff to check your application."
     key = os.getenv("TOM_LOOKUP_API_KEY", "").strip()
@@ -100,7 +105,7 @@ async def lookup_application(bot, recipient):
             json={"discordUsername": username}, timeout=20, allow_redirects=False,
         ) as response:
             if response.status == 404:
-                return "I couldn't find an application linked to your current Discord username. If you applied with a different username, please let staff know so they can check."
+                return APPLICATION_NOT_FOUND
             if response.status != 200:
                 logger.warning("Application lookup returned HTTP %s", response.status)
                 return "The application checker is temporarily unavailable. Please try again shortly or ask a member of staff."
@@ -117,6 +122,8 @@ async def lookup_application(bot, recipient):
 async def application_tom_code_reply(bot, recipient):
     record = await lookup_application(bot, recipient)
     greeting = "Hi, thanks for getting in touch!\n\n"
+    if record is APPLICATION_NOT_FOUND:
+        return greeting + NOT_FOUND_REPLY
     if isinstance(record, str):
         return greeting + record
     code = record.get("tomCode")
@@ -128,12 +135,15 @@ async def application_tom_code_reply(bot, recipient):
     )
 
 
-async def _application_status_reply(bot, recipient):
+async def _application_status_reply(bot, recipient, *, return_not_found=False):
     record = await lookup_application(bot, recipient)
+    if record is APPLICATION_NOT_FOUND:
+        return (NOT_FOUND_REPLY, True) if return_not_found else NOT_FOUND_REPLY
     if isinstance(record, str):
-        return record
+        return (record, False) if return_not_found else record
     if not isinstance(record.get("status"), str):
-        return "I couldn't read a clear application status from the system. A member of Training & Recruitment will need to check it."
+        reply = "I couldn't read a clear application status from the system. A member of Training & Recruitment will need to check it."
+        return (reply, False) if return_not_found else reply
     status = known_status(record["status"])
     if status is None:
         status = await classify_unknown_status(bot, record["status"])
@@ -145,16 +155,22 @@ async def _application_status_reply(bot, recipient):
             if status == "accepted" else
             "Unfortunately, your application has been **declined**. Thank you for taking the time to apply."
         )
-        return (
+        reply = (
             f"{outcome}\n\n{DM_GUIDANCE}\n\n"
             f"If you can't find the message, let us know here and we can help you with the next step.{reference}"
         )
+        return (reply, False) if return_not_found else reply
     if status == "submitted":
-        return f"Your application has been received and is **awaiting review**.\n\n{await application_reading_reply(bot)}{reference}"
+        reply = f"Your application has been received and is **awaiting review**.\n\n{await application_reading_reply(bot)}{reference}"
+        return (reply, False) if return_not_found else reply
     if status == "reviewing":
-        return f"Your application is **currently being reviewed**.\n\nPlease keep an eye on your DMs from **TUI | Careers#9460** for your result. Thank you for your patience while the team reviews your application.{reference}"
+        reply = f"Your application is **currently being reviewed**.\n\nPlease keep an eye on your DMs from **TUI | Careers#9460** for your result. Thank you for your patience while the team reviews your application.{reference}"
+        return (reply, False) if return_not_found else reply
     if status == "archived":
-        return OUTCOME_UNAVAILABLE + reference
+        reply = OUTCOME_UNAVAILABLE + reference
+        return (reply, False) if return_not_found else reply
     if status == "withdrawn":
-        return f"Your application is recorded as **withdrawn or cancelled**.\n\nIf you weren't expecting this, let us know here so Training & Recruitment can check before you submit another application.{reference}"
-    return OUTCOME_UNAVAILABLE + reference
+        reply = f"Your application is recorded as **withdrawn or cancelled**.\n\nIf you weren't expecting this, let us know here so Training & Recruitment can check before you submit another application.{reference}"
+        return (reply, False) if return_not_found else reply
+    reply = OUTCOME_UNAVAILABLE + reference
+    return (reply, False) if return_not_found else reply

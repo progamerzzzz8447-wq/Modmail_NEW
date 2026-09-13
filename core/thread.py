@@ -186,6 +186,7 @@ class Thread:
         self._auto_close_check_active = False
         self._auto_close_check_message = None
         self._all_closure_alias_ran = False
+        self._pending_application_username_check = False
         self._subscription_warning_times = {}
         self._alias_subscription_bypass_authors = set()
         self._pending_flightnotlogged_confirmation = None
@@ -918,7 +919,9 @@ class Thread:
         """Deliver a configured AI-selected reply and preserve it in the ticket log."""
         from core.application_reading import expand_application_reading
 
-        response_text = await expand_application_reading(self.bot, response_text, recipient=self.recipient)
+        response_text = await expand_application_reading(
+            self.bot, response_text, recipient=self.recipient, thread=self
+        )
         joint_id = generate_ai_message_joint_id()
         response_text = normalize_generated_reply_layout(response_text)
         timestamp = discord.utils.utcnow()
@@ -1648,7 +1651,8 @@ class Thread:
                     elif alias_action is not None:
                         self._intake_collecting = False
                         self._intake_handed_to_agent = True
-                        await self._run_automatic_aiall()
+                        if not self._pending_application_username_check:
+                            await self._run_automatic_aiall()
                     else:
                         self._intake_collecting = True
                         self.schedule_informative_autoreply_rescan(message)
@@ -1958,6 +1962,77 @@ class Thread:
                             "Could not delete the automatic close-check marker.",
                             exc_info=True,
                         )
+
+    async def handle_pending_application_username_check(self, message) -> bool:
+        """Retry a missing application lookup using the username supplied by the recipient."""
+        if not self._pending_application_username_check:
+            return False
+
+        content = str(getattr(message, "content", "") or "").strip()
+        candidates = re.findall(r"(?<![\w.])[A-Za-z0-9_.]{2,32}(?![\w.])", content)
+        ignored = {"my", "discord", "username", "user", "is", "it", "was", "used"}
+        supplied_username = next(
+            (value for value in reversed(candidates) if value.casefold() not in ignored),
+            None,
+        )
+        if supplied_username is None:
+            await self._send_ai_autoreply(
+                "Application username check",
+                "Please provide only the Discord username used on your application so I can check it again.",
+            )
+            return True
+
+        from core.application_status import (
+            APPLICATION_NOT_FOUND,
+            _application_status_reply,
+            lookup_application,
+        )
+
+        record = await lookup_application(self.bot, username=supplied_username)
+        if isinstance(record, str):
+            await self._send_ai_autoreply("Application username check", record)
+            return True
+
+        self._pending_application_username_check = False
+        contacting_username = str(getattr(self.recipient, "name", "") or "").strip()
+        handoff_result = {
+            "handoff_team": "Training & Recruitment",
+            "ticket_summary": "Automatic application lookup requires manual review.",
+            "primary_question": "Please review and locate the recipient's application.",
+        }
+        if record is APPLICATION_NOT_FOUND:
+            response = (
+                "I still couldn't find an application using that Discord username. Please confirm "
+                "the details below so a member of Training & Recruitment can review this manually.\n\n"
+                "```\nROLEPLAY NAME USED:\nTOM CODE:\nDISCORD ID:\n```"
+            )
+            await self._send_ai_autoreply("Application not found", response)
+            await self._send_smart_intake_handoff(
+                handoff_result,
+                "**Application lookup:** No application was found using either Discord username.",
+            )
+            return True
+
+        if supplied_username.casefold() != contacting_username.casefold():
+            response = (
+                f"I found an application under **{supplied_username}**, but that username does not "
+                f"match the Discord account contacting us (**{contacting_username}**). A member of "
+                "Training & Recruitment will review the mismatch and continue the transfer."
+            )
+            await self._send_ai_autoreply("Application account mismatch", response)
+            await self._send_smart_intake_handoff(
+                handoff_result,
+                "**Application lookup:** A record was found, but its supplied Discord username "
+                "does not match the ticket owner.",
+            )
+            return True
+
+        reply, _ = await _application_status_reply(
+            self.bot, self.recipient, return_not_found=True
+        )
+        await self._send_ai_autoreply("Application status", reply)
+        await self._run_automatic_aiall()
+        return True
 
     async def _run_roblox_game_pass_autoreply(self, message, ticket_text: str) -> None:
         """Send the fixed game-pass guidance once per ticket without calling Gemini."""
@@ -2544,7 +2619,8 @@ class Thread:
                     if alias_action is not None:
                         self._intake_collecting = False
                         self._intake_handed_to_agent = True
-                        await self._run_automatic_aiall()
+                        if not self._pending_application_username_check:
+                            await self._run_automatic_aiall()
                     else:
                         self._intake_collecting = True
                         self.schedule_informative_autoreply_rescan(message)

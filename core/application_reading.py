@@ -168,7 +168,7 @@ async def handle_reading_question(thread, message, *, allow_resolution=False):
     return True
 
 
-async def expand_application_reading(bot, text, *, recipient=None):
+async def expand_application_reading(bot, text, *, recipient=None, thread=None):
     # Status lookup uses the actual ticket recipient, never a supplied username.
     from core.application_status import (
         STATUS_MARKER, TOM_CODE_MARKER, application_status_reply, application_tom_code_reply,
@@ -177,7 +177,19 @@ async def expand_application_reading(bot, text, *, recipient=None):
     if TOM_CODE_MARKER in text:
         text = text.replace(TOM_CODE_MARKER, await application_tom_code_reply(bot, recipient))
     if STATUS_MARKER in text:
-        text = text.replace(STATUS_MARKER, await application_status_reply(bot, recipient))
+        if thread is None:
+            status_reply = await application_status_reply(bot, recipient)
+            text = text.replace(STATUS_MARKER, status_reply)
+        else:
+            from core.application_status import _application_status_reply
+            status_reply, not_found = await _application_status_reply(
+                bot, recipient, return_not_found=True
+            )
+            thread._pending_application_username_check = not_found
+            text = text.replace(
+                STATUS_MARKER,
+                "Hi, thanks for getting in touch!\n\n" + status_reply,
+            )
     if READING_MARKER not in text:
         return text
     text = text.replace("Application review timing: ", "")
