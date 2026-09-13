@@ -3,6 +3,7 @@ import copy
 import base64
 import functools
 import io
+import os
 import re
 import time
 import traceback
@@ -81,6 +82,20 @@ AI_INTAKE_MODEL = "gemini-3.5-flash-lite"
 RESOLVED_CATEGORY_ID = 1369044841366814871
 SUBQUAL_GUILD_ID = 1335548232301809704
 SUBQUAL_REQUIRED_DAYS = 14
+SUBQUAL_ACADEMY_GUILD_ID = 1393691971612184658
+SUBQUAL_TRAINEE_URL = "https://obcdtximizxmjftbjyop.supabase.co/functions/v1/internal-trainee"
+SUBQUAL_POSITIONS = {
+    "cabin crew": "cabin-crew",
+    "cabin-crew": "cabin-crew",
+    "flight deck": "flight-deck",
+    "flight-deck": "flight-deck",
+    "ground ops": "ground-ops",
+    "ground operations": "ground-ops",
+    "ground-ops": "ground-ops",
+    "passenger services": "passenger-services",
+    "passenger service": "passenger-services",
+    "passenger-services": "passenger-services",
+}
 AI_HANDOFF_TEAMS = {
     "Senior Management": {
         "role_id": 1531741911784624238,
@@ -2113,6 +2128,19 @@ class Thread:
             values.pop("CURRENTLY HOLD A SUB-QUAL? (Y/N)", None)
             return True
 
+        desired = " ".join(
+            re.findall(r"[a-z0-9]+", values["DESIRED SUB DEPARTMENT"].casefold())
+        )
+        position = SUBQUAL_POSITIONS.get(desired)
+        if position is None:
+            values.pop("DESIRED SUB DEPARTMENT", None)
+            await self._send_ai_autoreply(
+                "Sub-qualification department clarification",
+                "Please confirm the desired sub department using one of these options:\n\n"
+                "- Cabin Crew\n- Flight Deck\n- Ground Ops\n- Passenger Services",
+            )
+            return True
+
         guild = self.bot.get_guild(SUBQUAL_GUILD_ID)
         member = None
         if guild is not None:
@@ -2163,16 +2191,114 @@ class Thread:
             await self._send_smart_intake_handoff(result, "**Sub-qualification:** Existing sub-qualification declared; human review required.")
             return True
 
-        raw_alias = (getattr(self.bot, "aliases", {}) or {}).get("subcertpass")
-        if raw_alias is None:
-            await self.channel.send("The `subcertpass` alias is unavailable; awaiting an agent.")
+        api_key = os.getenv("SUBQUAL_INTERNAL_TRAINEE_API_KEY", "").strip()
+        if not api_key or self.bot.session is None:
+            await self.channel.send(
+                "The internal trainee portal connection is unavailable; awaiting an agent."
+            )
             return True
+        payload = {
+            "discordUsername": str(getattr(self.recipient, "name", "") or ""),
+            "discordId": str(self.id),
+            "position": position,
+        }
+        try:
+            async with self.bot.session.post(
+                SUBQUAL_TRAINEE_URL,
+                headers={"Content-Type": "application/json", "x-api-key": api_key},
+                json=payload,
+                timeout=20,
+                allow_redirects=False,
+            ) as response:
+                if response.status not in {200, 201}:
+                    raise RuntimeError(f"Internal trainee API returned HTTP {response.status}")
+                trainee = await response.json()
+            if not isinstance(trainee, Mapping):
+                raise ValueError("Internal trainee API returned an invalid response")
+            tom_code = trainee.get("tomCode") or trainee.get("tom_code") or trainee.get("code")
+            password = (
+                trainee.get("password")
+                or trainee.get("temporaryPassword")
+                or trainee.get("temporary_password")
+            )
+            if not isinstance(tom_code, str) or not tom_code.strip():
+                raise ValueError("Internal trainee API did not return a TOM code")
+            if not isinstance(password, str) or not password.strip():
+                raise ValueError("Internal trainee API did not return a password")
+
+            academy_guild = self.bot.get_guild(SUBQUAL_ACADEMY_GUILD_ID)
+            if academy_guild is None:
+                academy_guild = await self.bot.fetch_guild(SUBQUAL_ACADEMY_GUILD_ID)
+            invite_channels = []
+            system_channel = getattr(academy_guild, "system_channel", None)
+            if system_channel is not None:
+                invite_channels.append(system_channel)
+            invite_channels.extend(
+                channel
+                for channel in getattr(academy_guild, "text_channels", [])
+                if channel not in invite_channels
+            )
+            if not invite_channels and hasattr(academy_guild, "fetch_channels"):
+                fetched_channels = await academy_guild.fetch_channels()
+                invite_channels.extend(
+                    channel for channel in fetched_channels if hasattr(channel, "create_invite")
+                )
+            invite = None
+            for invite_channel in invite_channels:
+                try:
+                    invite = await invite_channel.create_invite(
+                        max_age=7 * 24 * 60 * 60,
+                        max_uses=1,
+                        unique=True,
+                        reason=f"Approved sub-qualification request for Discord user {self.id}",
+                    )
+                    break
+                except (discord.Forbidden, discord.HTTPException):
+                    continue
+            if invite is None:
+                raise RuntimeError("Could not create a one-use Academy invite")
+        except Exception:
+            logger.exception("Could not provision an approved sub-qualification trainee.")
+            self._pending_subqual_request = None
+            result = {
+                "handoff_team": "Training & Recruitment",
+                "ticket_summary": "Eligible sub-qualification request could not be provisioned.",
+                "primary_question": "Please create the trainee and Academy invite manually.",
+            }
+            await self._send_ai_autoreply(
+                "Sub-qualification provisioning review",
+                "Your request passed the automatic eligibility checks, but I couldn't complete "
+                "the Academy setup. A member of Training & Recruitment has been requested to "
+                "complete it manually.",
+            )
+            await self._send_smart_intake_handoff(
+                result,
+                "**Sub-qualification:** Eligible request; portal or invite provisioning failed.",
+            )
+            return True
+
         self._pending_subqual_request = None
-        await self._execute_ai_alias(
-            "Sub-qualification approved",
-            {"alias": "subcertpass", "steps": parse_alias(raw_alias)},
-            message,
+        role_name = position.replace("-", " ").title()
+        approval = (
+            "## <:Globe:1544760634359554189> SUB DEPARTMENT - APPROVED\n\n"
+            f"Hello <@{self.id}>, thank you for reaching out to us regarding your sub department "
+            "request. We have approved your request. You will only have 7 days to complete your "
+            "training or you will have to re-request a sub certification. Note that if you are an "
+            "instructor, you should log out of your instructor account.\n\n"
+            "Here is the link to our academy portal: https://tui-academy.vercel.app/\n\n"
+            "Your TOM Code and password are below.\n\n"
+            f"**TOM CODE:** `{tom_code.strip()}`\n"
+            f"**PASSWORD:** `{password.strip()}`\n\n"
+            "Please note that you will not need to resit your STO Training module. You will be "
+            "moved to your department module. If you have any questions, please reach out via "
+            "Academy Support.\n\n"
+            "Please screenshot the details below within the role-request channel.\n\n"
+            f"**USER:** <@{self.id}>\n"
+            f"**TRAINING FOR:** {role_name}\n"
+            f"**INVITE:** {invite}\n\n"
+            "Many thanks,"
         )
+        await self._send_ai_autoreply("Sub-qualification approved", approval)
         await self._run_automatic_aiall()
         return True
 
