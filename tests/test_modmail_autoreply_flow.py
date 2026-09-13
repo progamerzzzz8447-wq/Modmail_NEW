@@ -47,6 +47,8 @@ class ModmailAutoreplyFlowTests(unittest.IsolatedAsyncioTestCase):
             begin_followup_autoreply_workflow=AsyncMock(),
             begin_acknowledgement_closure_workflow=AsyncMock(),
             cancel_informative_autoreply_rescan=lambda: None,
+            handle_pending_subqual_request=AsyncMock(return_value=False),
+            handle_pending_application_username_check=AsyncMock(return_value=False),
             handle_flightnotlogged_confirmation=AsyncMock(return_value=False),
         )
 

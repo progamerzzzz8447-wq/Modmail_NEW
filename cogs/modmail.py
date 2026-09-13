@@ -128,6 +128,9 @@ class Modmail(commands.Cog):
         # intake branch below immediately reassesses the new message and complete transcript.
         thread.cancel_informative_autoreply_rescan()
 
+        if await thread.handle_pending_subqual_request(message):
+            return
+
         if await thread.handle_pending_application_username_check(message):
             return
 

@@ -79,6 +79,8 @@ from core.utils import (
 logger = getLogger(__name__)
 AI_INTAKE_MODEL = "gemini-3.5-flash-lite"
 RESOLVED_CATEGORY_ID = 1369044841366814871
+SUBQUAL_GUILD_ID = 1335548232301809704
+SUBQUAL_REQUIRED_DAYS = 14
 AI_HANDOFF_TEAMS = {
     "Senior Management": {
         "role_id": 1531741911784624238,
@@ -187,6 +189,7 @@ class Thread:
         self._auto_close_check_message = None
         self._all_closure_alias_ran = False
         self._pending_application_username_check = False
+        self._pending_subqual_request = None
         self._subscription_warning_times = {}
         self._alias_subscription_bypass_authors = set()
         self._pending_flightnotlogged_confirmation = None
@@ -1651,7 +1654,10 @@ class Thread:
                     elif alias_action is not None:
                         self._intake_collecting = False
                         self._intake_handed_to_agent = True
-                        if not self._pending_application_username_check:
+                        if not (
+                            self._pending_application_username_check
+                            or self._pending_subqual_request is not None
+                        ):
                             await self._run_automatic_aiall()
                     else:
                         self._intake_collecting = True
@@ -2034,6 +2040,142 @@ class Thread:
         await self._run_automatic_aiall()
         return True
 
+    async def handle_pending_subqual_request(self, message) -> bool:
+        """Collect and validate a sub-qualification form, then approve or hand it off."""
+        if self._pending_subqual_request is None:
+            return False
+
+        labels = (
+            "YOUR ROBLOX USERNAME",
+            "YOUR DISCORD USERNAME",
+            "MAIN DEPARTMENT",
+            "DESIRED SUB DEPARTMENT",
+            "CURRENTLY HOLD A SUB-QUAL? (Y/N)",
+        )
+        values = self._pending_subqual_request
+        message_text = build_ticket_text(message).strip()
+
+        # Prefer explicit pasted form lines. Gemini fills only the remaining fields when the
+        # recipient answers naturally instead of pasting the form back.
+        for label in labels:
+            match = re.search(
+                rf"(?im)^\s*`*\s*{re.escape(label)}\s*:\s*`*\s*(.+?)\s*`*\s*$",
+                message_text,
+            )
+            if match and match.group(1).strip():
+                values[label] = match.group(1).strip()
+
+        missing = [label for label in labels if not values.get(label)]
+        if missing:
+            api_key = self.bot.config.get("gemini_api_key", convert=False)
+            if api_key and self.bot.session is not None:
+                fields = [
+                    {"field_id": f"field_{index}", "label": label}
+                    for index, label in enumerate(missing, 1)
+                ]
+                reviewer = GeminiFormAutofill(
+                    self.bot.session,
+                    str(api_key),
+                    model=AI_INTAKE_MODEL,
+                )
+                fills = await reviewer.identify_fills(
+                    f"[RECIPIENT MESSAGE]\n{message_text}", fields
+                )
+                for field in fields:
+                    value = (fills or {}).get(field["field_id"])
+                    if value:
+                        values[field["label"]] = value
+
+        missing = [label for label in labels if not values.get(label)]
+        if missing:
+            requested = "\n".join(f"{label}:" for label in missing)
+            await self._send_ai_autoreply(
+                "Sub-qualification details required",
+                "I still need the following information before I can review this request:\n\n"
+                f"```\n{requested}\n```",
+            )
+            return True
+
+        holds_subqual = " ".join(
+            re.findall(r"[a-z]+", values["CURRENTLY HOLD A SUB-QUAL? (Y/N)"].casefold())
+        )
+        yes_values = {"y", "yes", "yeah", "yep", "i do", "currently yes"}
+        no_values = {"n", "no", "nope", "i do not", "i don't", "not currently"}
+        if holds_subqual in yes_values:
+            has_existing_subqual = True
+        elif holds_subqual in no_values:
+            has_existing_subqual = False
+        else:
+            await self._send_ai_autoreply(
+                "Sub-qualification clarification",
+                "Please confirm with **Y** or **N**: do you currently hold a sub-qualification?",
+            )
+            values.pop("CURRENTLY HOLD A SUB-QUAL? (Y/N)", None)
+            return True
+
+        guild = self.bot.get_guild(SUBQUAL_GUILD_ID)
+        member = None
+        if guild is not None:
+            try:
+                member = await self.bot.get_or_fetch_member(guild, self.id)
+            except Exception:
+                logger.warning("Could not check sub-qualification guild tenure.", exc_info=True)
+        joined_at = getattr(member, "joined_at", None)
+        if joined_at is None:
+            self._pending_subqual_request = None
+            result = {
+                "handoff_team": "Training & Recruitment",
+                "ticket_summary": "Sub-qualification tenure could not be verified automatically.",
+                "primary_question": "Please manually review the sub-qualification request.",
+            }
+            await self._send_ai_autoreply(
+                "Sub-qualification review",
+                "I couldn't verify how long you have been in the Careers server. A member of "
+                "Training & Recruitment has been requested to review this manually.",
+            )
+            await self._send_smart_intake_handoff(result, "**Sub-qualification:** Guild tenure needs manual verification.")
+            return True
+
+        if joined_at.tzinfo is None:
+            joined_at = joined_at.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) - joined_at < timedelta(days=SUBQUAL_REQUIRED_DAYS):
+            self._pending_subqual_request = None
+            await self._send_ai_autoreply(
+                "Sub-qualification declined",
+                "Your sub-qualification request has been declined because you have not been in "
+                f"the Careers server for at least {SUBQUAL_REQUIRED_DAYS} days, which is a requirement.",
+            )
+            await self._run_automatic_aiall()
+            return True
+
+        if has_existing_subqual:
+            self._pending_subqual_request = None
+            result = {
+                "handoff_team": "Training & Recruitment",
+                "ticket_summary": "Applicant already holds a sub-qualification.",
+                "primary_question": "Please manually review the additional sub-qualification request.",
+            }
+            await self._send_ai_autoreply(
+                "Sub-qualification human review",
+                "Because you already hold a sub-qualification, a member of Training & Recruitment "
+                "has been requested to review your request manually.",
+            )
+            await self._send_smart_intake_handoff(result, "**Sub-qualification:** Existing sub-qualification declared; human review required.")
+            return True
+
+        raw_alias = (getattr(self.bot, "aliases", {}) or {}).get("subcertpass")
+        if raw_alias is None:
+            await self.channel.send("The `subcertpass` alias is unavailable; awaiting an agent.")
+            return True
+        self._pending_subqual_request = None
+        await self._execute_ai_alias(
+            "Sub-qualification approved",
+            {"alias": "subcertpass", "steps": parse_alias(raw_alias)},
+            message,
+        )
+        await self._run_automatic_aiall()
+        return True
+
     async def _run_roblox_game_pass_autoreply(self, message, ticket_text: str) -> None:
         """Send the fixed game-pass guidance once per ticket without calling Gemini."""
         selected_name = "Roblox game-pass link"
@@ -2264,6 +2406,10 @@ class Thread:
         form_fills: typing.Optional[typing.Mapping[str, str]] = None,
     ) -> None:
         """Execute every alias step in order while preserving the AI footer on replies."""
+        if str(alias_action.get("alias") or "").strip().casefold() == "subqual":
+            self._pending_subqual_request = {
+                "YOUR DISCORD USERNAME": str(getattr(self.recipient, "name", "") or "").strip()
+            }
         action_errors = []
         for step in alias_action["steps"]:
             try:
@@ -2284,6 +2430,21 @@ class Thread:
                         source_message,
                         form_fills=form_fills,
                     )
+
+                    if self._pending_subqual_request is not None:
+                        for label in (
+                            "YOUR ROBLOX USERNAME",
+                            "YOUR DISCORD USERNAME",
+                            "MAIN DEPARTMENT",
+                            "DESIRED SUB DEPARTMENT",
+                            "CURRENTLY HOLD A SUB-QUAL? (Y/N)",
+                        ):
+                            match = re.search(
+                                rf"(?im)^\s*`*\s*{re.escape(label)}\s*:\s*`*\s*(.+?)\s*`*\s*$",
+                                response_text,
+                            )
+                            if match and match.group(1).strip():
+                                self._pending_subqual_request[label] = match.group(1).strip()
 
                     await self._send_ai_autoreply(display_name, response_text)
                     if no_fill_reason:
@@ -2619,7 +2780,10 @@ class Thread:
                     if alias_action is not None:
                         self._intake_collecting = False
                         self._intake_handed_to_agent = True
-                        if not self._pending_application_username_check:
+                        if not (
+                            self._pending_application_username_check
+                            or self._pending_subqual_request is not None
+                        ):
                             await self._run_automatic_aiall()
                     else:
                         self._intake_collecting = True
