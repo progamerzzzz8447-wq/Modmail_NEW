@@ -2212,33 +2212,53 @@ class Thread:
                 timeout=20,
                 allow_redirects=False,
             ) as response:
-                if response.status not in {200, 201}:
+                if not 200 <= response.status < 300:
                     raise RuntimeError(f"Internal trainee API returned HTTP {response.status}")
                 trainee = await response.json()
             if not isinstance(trainee, Mapping):
                 raise ValueError("Internal trainee API returned an invalid response")
-            credential_source = trainee
-            for container_name in ("trainee", "data", "user", "credentials", "result"):
-                nested = trainee.get(container_name)
-                if isinstance(nested, Mapping):
-                    credential_source = nested
-                    break
-            tom_code = (
-                credential_source.get("tomCode")
-                or credential_source.get("tom_code")
-                or credential_source.get("tom")
-                or credential_source.get("code")
+
+            def find_response_value(value, accepted_keys):
+                if isinstance(value, Mapping):
+                    for key, nested in value.items():
+                        if str(key).casefold() in accepted_keys and isinstance(nested, str):
+                            if nested.strip():
+                                return nested
+                    for nested in value.values():
+                        found = find_response_value(nested, accepted_keys)
+                        if found:
+                            return found
+                elif isinstance(value, (list, tuple)):
+                    for nested in value:
+                        found = find_response_value(nested, accepted_keys)
+                        if found:
+                            return found
+                return None
+
+            tom_code = find_response_value(
+                trainee,
+                {"tomcode", "tom_code", "tom", "code", "tomcodenumber", "tom_code_number"},
             )
-            password = (
-                credential_source.get("password")
-                or credential_source.get("temporaryPassword")
-                or credential_source.get("temporary_password")
-                or credential_source.get("tempPassword")
+            password = find_response_value(
+                trainee,
+                {
+                    "password",
+                    "temporarypassword",
+                    "temporary_password",
+                    "temppassword",
+                    "temp_password",
+                    "initialpassword",
+                    "initial_password",
+                    "generatedpassword",
+                    "generated_password",
+                    "applicationref",
+                    "application_ref",
+                },
             )
             if not isinstance(tom_code, str) or not tom_code.strip():
                 raise ValueError("Internal trainee API did not return a TOM code")
             if not isinstance(password, str) or not password.strip():
-                raise ValueError("Internal trainee API did not return a password")
+                raise ValueError("Internal trainee API did not return an application reference")
 
             provisioning_stage = "one-use Academy invite creation"
             academy_guild = self.bot.get_guild(SUBQUAL_ACADEMY_GUILD_ID)
@@ -2273,7 +2293,7 @@ class Thread:
                     continue
             if invite is None:
                 raise RuntimeError("Could not create a one-use Academy invite")
-        except Exception:
+        except Exception as exc:
             logger.exception("Could not provision an approved sub-qualification trainee.")
             self._pending_subqual_request = None
             result = {
@@ -2289,7 +2309,8 @@ class Thread:
             )
             await self._send_smart_intake_handoff(
                 result,
-                f"**Sub-qualification:** Eligible request; {provisioning_stage} failed.",
+                f"**Sub-qualification:** Eligible request; {provisioning_stage} failed. "
+                f"Technical detail: {type(exc).__name__}: {str(exc)[:300]}",
             )
             return True
 
