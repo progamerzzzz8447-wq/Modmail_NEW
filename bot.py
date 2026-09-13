@@ -1584,6 +1584,12 @@ class ModmailBot(commands.Bot):
                     and getattr(ctx, "_manual_alias_name", "").casefold() == "all"
                 ):
                     thread._all_closure_alias_ran = True
+                if (
+                    thread is not None
+                    and not getattr(ctx, "command_failed", False)
+                    and getattr(ctx, "_manual_alias_name", "").casefold() == "subqual"
+                ):
+                    thread.begin_subqual_request()
                 continue
 
             thread = await self.threads.find(channel=ctx.channel)

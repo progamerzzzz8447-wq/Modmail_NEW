@@ -2239,6 +2239,12 @@ class Thread:
                 if channel not in invite_channels
             )
             if not invite_channels and hasattr(academy_guild, "fetch_channels"):
+                invite_channels.extend(
+                    channel
+                    for channel in await academy_guild.fetch_channels()
+                    if hasattr(channel, "create_invite")
+                )
+            if not invite_channels and hasattr(academy_guild, "fetch_channels"):
                 fetched_channels = await academy_guild.fetch_channels()
                 invite_channels.extend(
                     channel for channel in fetched_channels if hasattr(channel, "create_invite")
@@ -2301,6 +2307,12 @@ class Thread:
         await self._send_ai_autoreply("Sub-qualification approved", approval)
         await self._run_automatic_aiall()
         return True
+
+    def begin_subqual_request(self) -> None:
+        """Arm the follow-up workflow when staff invoke the subqual alias manually."""
+        self._pending_subqual_request = {
+            "YOUR DISCORD USERNAME": str(getattr(self.recipient, "name", "") or "").strip()
+        }
 
     async def _run_roblox_game_pass_autoreply(self, message, ticket_text: str) -> None:
         """Send the fixed game-pass guidance once per ticket without calling Gemini."""
