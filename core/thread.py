@@ -96,19 +96,6 @@ SUBQUAL_POSITIONS = {
     "passenger service": "passenger-services",
     "passenger-services": "passenger-services",
 }
-SUBQUAL_REQUEST_MESSAGE = (
-    "## <:Notepad:1407480615053557765> SUB-QUALIFICATION REQUEST\n"
-    "To continue with the request, please ensure you have been in your main department for at "
-    "least 14 days, and preferably have passed your new hire period.\n"
-    "```\n"
-    "YOUR ROBLOX USERNAME:\n"
-    "YOUR DISCORD USERNAME:\n"
-    "MAIN DEPARTMENT:\n"
-    "DESIRED SUB DEPARTMENT:\n"
-    "CURRENTLY HOLD A SUB-QUAL? (Y/N):\n"
-    "```\n"
-    "*This request will automatically be reviewed and approved by our AI support bot.*"
-)
 AI_HANDOFF_TEAMS = {
     "Senior Management": {
         "role_id": 1531741911784624238,
@@ -1528,6 +1515,7 @@ class Thread:
             alias_actions = {
                 name: action for name, action in alias_actions.items() if name in autoreplies
             }
+
         autoreply_catalog = {
             name: (alias_actions.get(name) or {}).get("alias", "") or name
             for name in autoreplies
@@ -2557,8 +2545,7 @@ class Thread:
         form_fills: typing.Optional[typing.Mapping[str, str]] = None,
     ) -> None:
         """Execute every alias step in order while preserving the AI footer on replies."""
-        is_subqual = str(alias_action.get("alias") or "").strip().casefold() == "subqual"
-        if is_subqual:
+        if str(alias_action.get("alias") or "").strip().casefold() == "subqual":
             self._pending_subqual_request = {
                 "YOUR DISCORD USERNAME": str(getattr(self.recipient, "name", "") or "").strip()
             }
@@ -2568,10 +2555,7 @@ class Thread:
                 parts = step.strip().split(maxsplit=1)
                 command = parts[0].casefold() if parts else ""
                 if command in SAFE_AI_REPLY_COMMANDS and len(parts) == 2 and parts[1].strip():
-                    # The subqual workflow is code-owned. Keep the configured alias's move and
-                    # rename actions, but do not let an outdated stored reply body bypass the
-                    # form that activates the follow-up eligibility review.
-                    response_text = SUBQUAL_REQUEST_MESSAGE if is_subqual else parts[1].strip()
+                    response_text = parts[1].strip()
                     if command in FORMATTED_AI_REPLY_COMMANDS:
                         response_text = self.bot.formatter.format(
                             response_text,

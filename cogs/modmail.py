@@ -1154,6 +1154,7 @@ class Modmail(commands.Cog):
     async def autoreply_set(self, ctx, name: str, *, value: commands.clean_content):
         """Create or update an AI-selectable set message."""
         autoreplies = self.bot.config["autoreplies"]
+        replacement_keys = set()
         if re.match(r"\s*name\s*:", name, re.IGNORECASE):
             try:
                 entry = parse_autoreply_rule_spec(name, value)
@@ -1184,11 +1185,28 @@ class Modmail(commands.Cog):
             for existing_key, existing_entry in autoreplies.items():
                 if existing_key == alias_name:
                     continue
-                existing_names = {
-                    name.casefold()
-                    for name, _ in self._autoreply_variants(existing_key, existing_entry)
+                existing_variants = self._autoreply_variants(existing_key, existing_entry)
+                existing_by_name = {
+                    display_name.casefold(): variant_alias.casefold()
+                    for display_name, variant_alias in existing_variants
                 }
-                if new_display_names & existing_names:
+                conflicts = new_display_names & set(existing_by_name)
+                if not conflicts:
+                    continue
+                new_by_name = {
+                    display_name.casefold(): variant_alias.casefold()
+                    for display_name, variant_alias in variants
+                }
+                # Editing may merge formerly standalone rules into one alternatives group when
+                # each duplicate display name still points to the same alias. Creating a rule, or
+                # changing what an existing display name executes, remains a hard conflict.
+                if (
+                    str(ctx.invoked_with).casefold() == "edit"
+                    and len(conflicts) == len(existing_variants)
+                    and all(existing_by_name[name] == new_by_name[name] for name in conflicts)
+                ):
+                    replacement_keys.add(existing_key)
+                else:
                     raise commands.BadArgument(
                         "Another primary or alternative autoreply already uses that display name."
                     )
@@ -1219,7 +1237,7 @@ class Modmail(commands.Cog):
         existing_choice_count = sum(
             self._autoreply_choice_count(existing_key, existing_entry)
             for existing_key, existing_entry in autoreplies.items()
-            if existing_key != key
+            if existing_key != key and existing_key not in replacement_keys
         )
         new_choice_count = self._autoreply_choice_count(key, entry)
         if existing_choice_count + new_choice_count > AUTOREPLY_TOTAL_CHOICE_LIMIT:
@@ -1230,6 +1248,8 @@ class Modmail(commands.Cog):
             )
 
         existed = key in autoreplies
+        for replacement_key in replacement_keys:
+            autoreplies.pop(replacement_key, None)
         autoreplies[key] = entry
         await self.bot.config.update()
         action = "Updated" if existed else "Created"
