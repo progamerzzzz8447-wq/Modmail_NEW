@@ -2235,29 +2235,11 @@ class Thread:
                             return found
                 return None
 
-            tom_code = find_response_value(
+            portal_credential = find_response_value(
                 trainee,
-                {"tomcode", "tom_code", "tom", "code", "tomcodenumber", "tom_code_number"},
+                {"applicationref", "application_ref"},
             )
-            password = find_response_value(
-                trainee,
-                {
-                    "password",
-                    "temporarypassword",
-                    "temporary_password",
-                    "temppassword",
-                    "temp_password",
-                    "initialpassword",
-                    "initial_password",
-                    "generatedpassword",
-                    "generated_password",
-                    "applicationref",
-                    "application_ref",
-                },
-            )
-            if not isinstance(tom_code, str) or not tom_code.strip():
-                raise ValueError("Internal trainee API did not return a TOM code")
-            if not isinstance(password, str) or not password.strip():
+            if not isinstance(portal_credential, str) or not portal_credential.strip():
                 raise ValueError("Internal trainee API did not return an application reference")
 
             provisioning_stage = "one-use Academy invite creation"
@@ -2323,9 +2305,9 @@ class Thread:
             "training or you will have to re-request a sub certification. Note that if you are an "
             "instructor, you should log out of your instructor account.\n\n"
             "Here is the link to our academy portal: https://tui-academy.vercel.app/\n\n"
-            "Your TOM Code and password are below.\n\n"
-            f"**TOM CODE:** `{tom_code.strip()}`\n"
-            f"**PASSWORD:** `{password.strip()}`\n\n"
+            "Your Academy username and password are below.\n\n"
+            f"**USER:** `{portal_credential.strip()}`\n"
+            f"**PASSWORD:** `{portal_credential.strip()}`\n\n"
             "Please note that you will not need to resit your STO Training module. You will be "
             "moved to your department module. If you have any questions, please reach out via "
             "Academy Support.\n\n"
