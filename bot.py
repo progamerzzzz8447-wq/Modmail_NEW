@@ -60,7 +60,10 @@ from core.utils import (
 
 logger = getLogger(__name__)
 
-COMMAND_DISABLED_GUILD_IDS = frozenset({1308444031188992090})
+COMMAND_DISABLED_GUILD_IDS = frozenset({
+    1308444031188992090,
+    1393691971612184658,
+})
 
 temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp")
 if not os.path.exists(temp_dir):
