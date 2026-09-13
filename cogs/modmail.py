@@ -57,6 +57,7 @@ from core.ai_reviewer import (
     find_command_references,
     finalize_generated_ai_reply,
     last_relayed_message_is_human_staff,
+    is_acknowledgement_only,
     parse_aireply_argument,
 )
 from core.ai_sorter import (
@@ -130,6 +131,17 @@ class Modmail(commands.Cog):
         # A flightnotlogged selection is a two-stage workflow. Its confirmation must be handled
         # before opening-window, subscription, test-mode, or ordinary autoreply routing.
         if await thread.handle_flightnotlogged_confirmation(message):
+            return
+
+        # Once AI ALL has asked whether anything else is needed, a recipient's explicit
+        # acknowledgement (including "that is all") should run the immediate AIBYE close flow.
+        if getattr(thread, "_all_closure_alias_ran", False) and is_acknowledgement_only(
+            getattr(message, "content", "")
+        ):
+            try:
+                await thread.begin_acknowledgement_closure_workflow(message)
+            except Exception:
+                logger.warning("AI acknowledgement closure workflow failed.", exc_info=True)
             return
 
         # Messages sent during the opening observation window are already relayed live and included

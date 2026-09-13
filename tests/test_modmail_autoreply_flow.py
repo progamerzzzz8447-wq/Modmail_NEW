@@ -17,7 +17,14 @@ class FakeConfig(dict):
 
 @unittest.skipIf(Modmail is None, "discord.py is not installed in the unit-test runtime")
 class ModmailAutoreplyFlowTests(unittest.IsolatedAsyncioTestCase):
-    async def _dispatch_followup(self, *, subscribers=None, sticky_subscription=False):
+    async def _dispatch_followup(
+        self,
+        *,
+        subscribers=None,
+        sticky_subscription=False,
+        all_closure_ran=False,
+        content="I need more help",
+    ):
         config = FakeConfig(
             subscriptions={"123": list(subscribers or [])},
             reply_reminders={},
@@ -27,16 +34,20 @@ class ModmailAutoreplyFlowTests(unittest.IsolatedAsyncioTestCase):
         cog.bot = SimpleNamespace(config=config)
         cog._ai_test_threads = set()
 
-        message = SimpleNamespace(id=456)
+        message = SimpleNamespace(id=456, content=content)
         thread = SimpleNamespace(
             id=123,
             _initial_message_id=1,
             _opening_intake_pending=False,
             _opening_alias_subscribed=sticky_subscription,
+            _all_closure_alias_ran=all_closure_ran,
             _intake_collecting=True,
             _intake_handed_to_agent=False,
             _awaiting_initial_inquiry=False,
             begin_followup_autoreply_workflow=AsyncMock(),
+            begin_acknowledgement_closure_workflow=AsyncMock(),
+            cancel_informative_autoreply_rescan=lambda: None,
+            handle_flightnotlogged_confirmation=AsyncMock(return_value=False),
         )
 
         await cog.on_thread_reply(thread, False, message, False, False)
@@ -55,3 +66,12 @@ class ModmailAutoreplyFlowTests(unittest.IsolatedAsyncioTestCase):
         thread.begin_followup_autoreply_workflow.assert_awaited_once_with(message)
         self.assertFalse(thread._intake_collecting)
         self.assertTrue(thread._intake_handed_to_agent)
+
+    async def test_that_is_all_after_ai_all_runs_aibye_closure(self):
+        thread, message = await self._dispatch_followup(
+            all_closure_ran=True,
+            content="That is all",
+        )
+
+        thread.begin_acknowledgement_closure_workflow.assert_awaited_once_with(message)
+        thread.begin_followup_autoreply_workflow.assert_not_awaited()

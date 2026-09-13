@@ -1645,6 +1645,10 @@ class Thread:
                         self._intake_collecting = False
                         self._intake_handed_to_agent = True
                         await self.channel.send("**You may now reply**")
+                    elif alias_action is not None:
+                        self._intake_collecting = False
+                        self._intake_handed_to_agent = True
+                        await self._run_automatic_aiall()
                     else:
                         self._intake_collecting = True
                         self.schedule_informative_autoreply_rescan(message)
@@ -1837,6 +1841,24 @@ class Thread:
         if revision != self._followup_revision or self._opening_intake_pending:
             return
 
+        current_text = build_ticket_text(message)
+        if self._all_closure_alias_ran and is_acknowledgement_only(current_text):
+            await self._send_ai_autoreply(
+                "Automatic AI ticket closure",
+                AI_TICKET_CLOSED_MESSAGE,
+            )
+            await self._log_ai_check(
+                message,
+                current_text,
+                outcome="resolved",
+                detail="Recipient confirmed that no further assistance was needed after AI ALL.",
+                selected_name="automatic aibye",
+                response_text=AI_TICKET_CLOSED_MESSAGE,
+                delivery_status="Automatic AI closure delivered and ticket closed.",
+            )
+            await self.close(closer=self.bot.user)
+            return
+
         async with self._intake_workflow_lock:
             if revision != self._followup_revision:
                 return
@@ -1851,7 +1873,6 @@ class Thread:
                     (log_entry or {}).get("messages") or [],
                     bot_user_id=self.bot.user.id,
                 )
-                current_text = build_ticket_text(message)
                 if current_text:
                     transcript += "\n\n---\n\n[LATEST RECIPIENT ACKNOWLEDGEMENT]\n" + current_text
                 questions_asked = count_logged_intake_questions(
@@ -2520,8 +2541,13 @@ class Thread:
                     )
                 )
                 if not self._opening_alias_subscribed:
-                    self._intake_collecting = True
-                    self.schedule_informative_autoreply_rescan(message)
+                    if alias_action is not None:
+                        self._intake_collecting = False
+                        self._intake_handed_to_agent = True
+                        await self._run_automatic_aiall()
+                    else:
+                        self._intake_collecting = True
+                        self.schedule_informative_autoreply_rescan(message)
                 if alias_action is not None:
                     delivery_status = f'AI alias `{alias_action["alias"]}` executed in full.'
                     if is_initial_message:
