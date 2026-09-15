@@ -505,6 +505,14 @@ The 80% pass mark does not automatically apply to STO.
 
 Training problems are handled by Training & Recruitment, normally within 48 hours.
 
+### Invalid Academy invites during AI intake
+
+When someone says an invite was invalid, first establish whether it was an Academy invite issued after a successful application. Ask them to provide the relevant application form details and the Discord invitation itself. If the request is not about the Academy (for example, it concerns transfer training), hand the ticket to Training & Recruitment rather than issuing an Academy invite.
+
+Before validating an Academy invite, check the person's application status in the Academy system. The application must be recorded as **successful**. If it is not successful, missing, or cannot be confirmed, do not issue an invite; tell the person that a successful application could not be validated and hand the ticket to Training & Recruitment.
+
+If a successful application is validated, check the submitted invite. If the invite was invalid because it was **used**, do not provide another invite and hand the ticket to Training & Recruitment. If the invite was invalid and **was not used**, provide one replacement, one-use invite to the Academy server (`1393691971612184658`). Never issue more than one replacement invite through AI intake, and do not provide an invite before the successful application and invite status have been validated.
+
 ### Trainee leave of absence
 
 A trainee LOA request requires:
