@@ -1395,6 +1395,19 @@ class Thread:
         )
         await self.close(closer=self.bot.user, after=24 * 60 * 60)
 
+    async def restart_intake_after_aiall(self) -> None:
+        """Turn a substantive post-AI-ALL reply into a fresh intake conversation."""
+        await self.cancel_closure()
+        removed_subscription = self.bot.config["subscriptions"].pop(str(self.id), None)
+        if removed_subscription is not None:
+            await self.bot.config.update()
+        self._all_closure_alias_ran = False
+        self._opening_alias_subscribed = False
+        self._opening_autoreply_sent = False
+        self._intake_handed_to_agent = False
+        self._intake_collecting = True
+        self._awaiting_initial_inquiry = False
+
     async def run_ai_intake_workflow(
         self,
         message,

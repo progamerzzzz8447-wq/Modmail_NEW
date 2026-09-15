@@ -150,15 +150,21 @@ class Modmail(commands.Cog):
                 logger.warning("AI acknowledgement closure workflow failed.", exc_info=True)
             return
 
+        # Any substantive reply after AI ALL is a new enquiry. Remove the old resolution's
+        # scheduled closure/subscription, then assess this message with the full intake path.
+        post_aiall_new_inquiry = getattr(thread, "_all_closure_alias_ran", False)
+        if post_aiall_new_inquiry:
+            await thread.restart_intake_after_aiall()
+
         # Messages sent during the opening observation window are already relayed live and included
         # in its combined AI context. This guard must run before continuous test mode so ?aitest
         # cannot race the opening sequence and send an alias before the AI introduction.
-        if getattr(thread, "_opening_intake_pending", False):
+        if not post_aiall_new_inquiry and getattr(thread, "_opening_intake_pending", False):
             if not getattr(thread, "_opening_collection_open", False):
                 thread._pending_followup_message = message
             return
 
-        if key in self._ai_test_threads:
+        if not post_aiall_new_inquiry and key in self._ai_test_threads:
             try:
                 await self._run_ai_test_cycle(thread, message)
             except Exception:
@@ -170,7 +176,15 @@ class Modmail(commands.Cog):
             return
 
         subscribers = self.bot.config["subscriptions"].get(key, [])
-        if subscribers or getattr(thread, "_opening_alias_subscribed", False):
+        if post_aiall_new_inquiry:
+            try:
+                await thread.begin_followup_autoreply_workflow(
+                    message,
+                    full_intake=True,
+                )
+            except Exception:
+                logger.warning("AI post-aiall new-ticket intake failed.", exc_info=True)
+        elif subscribers or getattr(thread, "_opening_alias_subscribed", False):
             thread._intake_collecting = False
             thread._intake_handed_to_agent = True
             # A subscription hands the conversation to a person, but it must not disable
