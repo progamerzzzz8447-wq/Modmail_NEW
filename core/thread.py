@@ -1605,21 +1605,16 @@ class Thread:
         has_discord_invite = bool(
             re.search(r"(?:https?://)?(?:discord(?:app)?\.com/invite|discord\.gg)/[A-Za-z0-9-]+", current_text, re.I)
         )
-        has_application_details = bool(
-            re.search(
-                r"(?:application|app).{0,120}(?:form|role|department|roblox|username|successful|accepted)",
-                current_text,
-                re.I | re.S,
-            )
+        has_applied_role = bool(
+            re.search(r"(?:applied\s*-?\s*for\s*role|applied\s*role|application\s*role)\s*:\s*\S+", current_text, re.I)
         )
-        if invalid_invite_request and not (has_discord_invite and has_application_details):
+        if invalid_invite_request and not (has_discord_invite and has_applied_role):
             selected_autoreply = None
             result["clear"] = False
             result["resolved"] = False
-            result["remaining_inquiries"] = ["application form details and the Discord invitation"]
+            result["remaining_inquiries"] = ["the applied-for role and Discord invitation"]
             result["clarification_question"] = (
-                "Please provide the application details in this format, along with the Discord "
-                "invitation itself:\n\n``\nAPPLICATION FORM / ROLE:\nROBLOX USERNAME:\nDISCORD USERNAME:\nDISCORD ID:\n\nDISCORD INVITE:\n```"
+                "Please provide the following:\n\n```\nAPPLIED FOR ROLE:\nDISCORD INVITE:\n```"
             )
         if selected_autoreply is not None:
             alias_action = alias_actions.get(selected_autoreply)

@@ -507,7 +507,14 @@ Training problems are handled by Training & Recruitment, normally within 48 hour
 
 ### Invalid Academy invites during AI intake
 
-When someone says an invite was invalid, first establish whether it was an Academy invite issued after a successful application. Ask them to provide the relevant application form details and the Discord invitation itself. If the request is not about the Academy (for example, it concerns transfer training), hand the ticket to Training & Recruitment rather than issuing an Academy invite.
+When someone says an invite was invalid, first establish whether it was an Academy invite issued after a successful application. Ask them to provide only the applied-for role and the Discord invitation itself, using this form:
+
+```text
+APPLIED FOR ROLE:
+DISCORD INVITE:
+```
+
+Do not ask for Roblox username, Discord username, or Discord ID. If the request is not about the Academy (for example, it concerns transfer training), hand the ticket to Training & Recruitment rather than issuing an Academy invite.
 
 Before validating an Academy invite, check the person's application status in the Academy system. The application must be recorded as **successful**. If it is not successful, missing, or cannot be confirmed, do not issue an invite; tell the person that a successful application could not be validated and hand the ticket to Training & Recruitment.
 
