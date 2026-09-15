@@ -1596,6 +1596,31 @@ class Thread:
             return
 
         selected_autoreply = result["selected_autoreply"]
+        # Invalid-invite requests require evidence before they can be handed off or resolved.
+        # Keep this guard in the workflow as well as in the model prompt so a permissive model
+        # result cannot skip the required form and invite collection.
+        invalid_invite_request = bool(
+            re.search(r"\binvalid\b.{0,80}\binvite\b|\binvite\b.{0,80}\binvalid\b", current_text, re.I | re.S)
+        )
+        has_discord_invite = bool(
+            re.search(r"(?:https?://)?(?:discord(?:app)?\.com/invite|discord\.gg)/[A-Za-z0-9-]+", current_text, re.I)
+        )
+        has_application_details = bool(
+            re.search(
+                r"(?:application|app).{0,120}(?:form|role|department|roblox|username|successful|accepted)",
+                current_text,
+                re.I | re.S,
+            )
+        )
+        if invalid_invite_request and not (has_discord_invite and has_application_details):
+            selected_autoreply = None
+            result["clear"] = False
+            result["resolved"] = False
+            result["remaining_inquiries"] = ["application form details and the Discord invitation"]
+            result["clarification_question"] = (
+                "Please provide the application details in this format, along with the Discord "
+                "invitation itself:\n\n``\nAPPLICATION FORM / ROLE:\nROBLOX USERNAME:\nDISCORD USERNAME:\nDISCORD ID:\n\nDISCORD INVITE:\n```"
+            )
         if selected_autoreply is not None:
             alias_action = alias_actions.get(selected_autoreply)
             if self._is_flightnotlogged_alias(alias_action):
