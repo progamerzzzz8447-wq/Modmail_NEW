@@ -197,6 +197,7 @@ class Thread:
         self._awaiting_initial_inquiry = False
         self._intake_workflow_lock = asyncio.Lock()
         self._followup_revision = 0
+        self._ai_form_sent_revision = None
         self._followup_messages = []
         self._ai_review_lock = asyncio.Lock()
         self._abuse_close_lock = asyncio.Lock()
@@ -963,6 +964,10 @@ class Thread:
         )
         embed.set_footer(text=footer_text)
         await self.recipient.send(embed=embed)
+        if "```" in response_text:
+            # The recipient must have a chance to fill in a fenced form before AI ALL runs.
+            # A later recipient reply advances the follow-up revision and permits assessment.
+            self._ai_form_sent_revision = self._followup_revision
 
         try:
             staff_message = await self.channel.send(embed=embed)
@@ -1373,6 +1378,14 @@ class Thread:
 
     async def _run_automatic_aiall(self) -> None:
         """Apply the same recipient-facing resolution outcome as the aiall command."""
+        if self.bot.config["subscriptions"].get(str(self.id)):
+            logger.info("Skipping automatic aiall for subscribed ticket %s.", self.id)
+            return
+        if getattr(self, "_ai_form_sent_revision", None) == self._followup_revision:
+            logger.info("Skipping automatic aiall while awaiting a form reply for ticket %s.", self.id)
+            self._intake_collecting = True
+            self._intake_handed_to_agent = False
+            return
         self.cancel_informative_autoreply_rescan()
         self._all_closure_alias_ran = True
         await self._send_ai_autoreply("Automatic all-inquiries closure", AI_ALL_CLOSING)

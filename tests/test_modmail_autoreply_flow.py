@@ -23,6 +23,7 @@ class ModmailAutoreplyFlowTests(unittest.IsolatedAsyncioTestCase):
         subscribers=None,
         sticky_subscription=False,
         all_closure_ran=False,
+        form_revision=None,
         content="I need more help",
     ):
         config = FakeConfig(
@@ -41,6 +42,7 @@ class ModmailAutoreplyFlowTests(unittest.IsolatedAsyncioTestCase):
             _opening_intake_pending=False,
             _opening_alias_subscribed=sticky_subscription,
             _all_closure_alias_ran=all_closure_ran,
+            _ai_form_sent_revision=form_revision,
             _intake_collecting=True,
             _intake_handed_to_agent=False,
             _awaiting_initial_inquiry=False,
@@ -68,6 +70,10 @@ class ModmailAutoreplyFlowTests(unittest.IsolatedAsyncioTestCase):
         thread.begin_followup_autoreply_workflow.assert_awaited_once_with(message)
         self.assertFalse(thread._intake_collecting)
         self.assertTrue(thread._intake_handed_to_agent)
+
+    async def test_recipient_reply_clears_form_wait_before_pending_handlers(self):
+        thread, _ = await self._dispatch_followup(form_revision=0)
+        self.assertIsNone(thread._ai_form_sent_revision)
 
     async def test_that_is_all_after_ai_all_runs_aibye_closure(self):
         thread, message = await self._dispatch_followup(

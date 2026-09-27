@@ -76,6 +76,7 @@ from core.utils import *
 logger = getLogger(__name__)
 
 MANUAL_AI_ROLE_IDS = (1391515982417100951, 1516405254571298866, 1531741911784624238)
+HR_CASE_ROLE_ID = 1442902654035562571
 RESOLVED_CATEGORY_ID = 1369044841366814871
 AI_CLOSE_MESSAGE = AI_TICKET_CLOSED_MESSAGE
 DEFAULT_SMART_AI_CONTEXT_PATH = Path(__file__).resolve().parent.parent / "core" / "smart_ai_context.md"
@@ -127,6 +128,7 @@ class Modmail(commands.Cog):
         # Any recipient response supersedes the five-minute quiet-ticket timer. The ordinary
         # intake branch below immediately reassesses the new message and complete transcript.
         thread.cancel_informative_autoreply_rescan()
+        thread._ai_form_sent_revision = None
 
         if await thread.handle_pending_subqual_request(message):
             return
@@ -3299,6 +3301,37 @@ class Modmail(commands.Cog):
             log_name="Manual annoy autoreply",
             tone_label="sarcastic",
         )
+
+    @commands.command(aliases=["caseopen", "hrcaseopen"])
+    @checks.has_any_role_id(HR_CASE_ROLE_ID)
+    @checks.thread_only()
+    async def caseopened(self, ctx):
+        """Send the formal HR case acknowledgment to the current ticket."""
+        case_numbers = self.bot.config["hr_case_numbers"]
+        channel_id = str(ctx.channel.id)
+        case_id = case_numbers.get(channel_id)
+        if not case_id:
+            used_ids = {str(value).upper() for value in case_numbers.values()}
+            alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            case_id = "".join(secrets.choice(alphabet) for _ in range(6))
+            while case_id in used_ids:
+                case_id = "".join(secrets.choice(alphabet) for _ in range(6))
+            case_numbers[channel_id] = case_id
+            await self.bot.config.update()
+
+        msg = (
+            f"**Case Opened: {str(case_id).upper()}**\n\n"
+            "Thank you for reaching out to us regarding your concern, we have now opened "
+            "a formal investigation into the matter listed above.\n\n"
+            "Whilst we aim to handle all reports as thoroughly and quickly as possible, "
+            "this sometimes can take longer so please avoid spam pinging or requesting followups.\n\n"
+            "If you have any additional information, please share that **now**, in "
+            "**as much detail** as possible.\n\n"
+            "Many thanks,\nHuman Resources."
+        )
+        ctx.message.content = msg
+        async with safe_typing(ctx):
+            await ctx.thread.reply(ctx.message, msg)
 
     @commands.command(aliases=["formatreply"])
     @checks.has_permissions(PermissionLevel.SUPPORTER)

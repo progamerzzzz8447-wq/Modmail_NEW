@@ -1621,13 +1621,29 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
         data = None
         retryable_statuses = {429, 500, 502, 503, 504}
         max_attempts = 3
+        failures = []
+
+        def failure_detail():
+            return (
+                f"Gemini intake assessment failed after {len(failures)} attempt(s): "
+                + " -> ".join(failures)
+                + "."
+            )
+
         for attempt in range(max_attempts):
+            # Spread retries across tickets instead of immediately hitting a busy service again.
+            retry_delay = 2 ** (attempt + 1) + secrets.randbelow(1001) / 1000
+            # A healthy Gemini service can still take longer for this unusually large
+            # structured prompt. Give retries a wider deadline instead of repeating the
+            # same timeout that has already proved insufficient (30s, 45s, then 60s by
+            # default). Keep the first attempt short so normal ticket intake stays quick.
+            attempt_timeout = self.timeout * (1 + (0.5 * attempt))
             try:
                 async with self.session.post(
                     request_url,
                     json=payload,
                     headers={"x-goog-api-key": self.api_key},
-                    timeout=self.timeout,
+                    timeout=attempt_timeout,
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
@@ -1654,57 +1670,48 @@ class GeminiIntakeAssessment(GeminiAutoReplyReviewer):
                                     break
                             except (TypeError, ValueError, json.JSONDecodeError):
                                 pass
-                        if attempt < max_attempts - 1:
-                            logger.warning(
-                                "Gemini returned invalid intake JSON; retrying (%s/%s).",
-                                attempt + 1,
-                                max_attempts,
-                            )
-                            await asyncio.sleep(0.5 * (attempt + 1))
-                            continue
+                        failures.append("unusable JSON response")
                         self.last_outcome = "invalid_response"
-                        self.last_detail = (
-                            "Gemini returned unusable intake JSON after three attempts."
-                        )
-                        return None
-                    if (
-                        response.status in retryable_statuses
-                        and attempt < max_attempts - 1
-                    ):
-                        logger.warning(
-                            "Gemini intake assessment returned HTTP %s; retrying (%s/%s).",
-                            response.status,
-                            attempt + 1,
-                            max_attempts,
-                        )
-                        await asyncio.sleep(0.5 * (attempt + 1))
-                        continue
-                    self.last_outcome = "http_error"
-                    retry_detail = f" after {attempt + 1} attempt(s)"
-                    self.last_detail = (
-                        f"Gemini returned HTTP {response.status}{retry_detail}."
-                    )
-                    logger.warning(
-                        "Gemini intake assessment failed with HTTP %s.", response.status
-                    )
-                    return None
+                    else:
+                        explanation = {
+                            429: " (rate/quota throttling)",
+                            503: " (service unavailable or overloaded; not a quota error)",
+                        }.get(response.status, "")
+                        failures.append(f"HTTP {response.status}{explanation}")
+                        self.last_outcome = "http_error"
+                        if response.status not in retryable_statuses:
+                            self.last_detail = failure_detail()
+                            logger.warning("%s", self.last_detail)
+                            return None
+                        # Honour numeric Retry-After values. If the server asks for more
+                        # than a minute, hand off rather than retrying before it is ready.
+                        try:
+                            retry_after = float(
+                                (getattr(response, "headers", None) or {}).get("Retry-After", 0)
+                            )
+                        except (TypeError, ValueError):
+                            retry_after = 0
+                        if retry_after > 60:
+                            self.last_detail = failure_detail() + " Server requested a longer retry delay."
+                            logger.warning("%s", self.last_detail)
+                            return None
+                        retry_delay = max(retry_delay, retry_after)
             except Exception as exc:
-                if attempt < max_attempts - 1:
-                    logger.warning(
-                        "Gemini intake request failed (%s); retrying (%s/%s).",
-                        type(exc).__name__,
-                        attempt + 1,
-                        max_attempts,
+                if isinstance(exc, asyncio.TimeoutError):
+                    failures.append(
+                        f"TimeoutError (request exceeded {attempt_timeout:g}s; quota status unknown)"
                     )
-                    await asyncio.sleep(0.5 * (attempt + 1))
-                    continue
+                else:
+                    # Exception messages may include request URLs or credentials.
+                    failures.append(type(exc).__name__)
                 self.last_outcome = "request_error"
-                self.last_detail = (
-                    f"Gemini intake assessment failed after three attempts "
-                    f"({type(exc).__name__})."
-                )
-                logger.warning("Gemini intake assessment request failed.", exc_info=True)
-                return None
+            self.last_detail = failure_detail()
+            logger.warning("%s", self.last_detail)
+            if attempt < max_attempts - 1:
+                # Release the HTTP response/connection before waiting for another attempt.
+                await asyncio.sleep(retry_delay)
+        else:
+            return None
         try:
             # Only the decision booleans are indispensable. Older/newer Gemini variants
             # occasionally omit an empty optional field despite responseSchema requiring it.

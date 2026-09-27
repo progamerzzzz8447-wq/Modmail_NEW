@@ -1315,14 +1315,14 @@ class ModmailBot(commands.Bot):
             snippet_text = self.snippets[message.content[len(invoked_prefix) :]]
         except KeyError:
             snippet_text = None
-        if invoker == "transfer" and self.all_commands.get(invoker) is not None:
+        protected_commands = {"transfer", "caseopened", "caseopen", "hrcaseopen"}
+        if invoker in protected_commands and self.all_commands.get(invoker) is not None:
             snippet_text = None
 
         # Check if there is any aliases being called.
         alias = self.aliases.get(invoker)
-        # ``transfer`` is now a first-class command. A transfer alias saved by
-        # an older deployment must not shadow the command implementation.
-        if invoker == "transfer" and self.all_commands.get(invoker) is not None:
+        # Saved aliases must not shadow these first-class commands.
+        if invoker in protected_commands and self.all_commands.get(invoker) is not None:
             alias = None
         if alias is not None and snippet_text is None:
             ctxs = []

@@ -1,6 +1,8 @@
+import asyncio
 import json
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from core.ai_reviewer import (
     AI_ALL_CLOSING,
@@ -55,14 +57,19 @@ from core.ai_reviewer import (
 
 
 class FakeResponse:
-    def __init__(self, status, data):
+    def __init__(self, status, data, *, headers=None):
         self.status = status
         self.data = data
+        self.headers = headers or {}
+        self.released = False
 
     async def __aenter__(self):
+        if isinstance(self.data, BaseException):
+            raise self.data
         return self
 
     async def __aexit__(self, exc_type, exc, traceback):
+        self.released = True
         return False
 
     async def json(self):
@@ -73,10 +80,12 @@ class FakeSession:
     def __init__(self, response):
         self.responses = response if isinstance(response, list) else [response]
         self.request = None
+        self.requests = []
         self.calls = 0
 
     def post(self, url, **kwargs):
         self.request = (url, kwargs)
+        self.requests.append(self.request)
         response = self.responses[min(self.calls, len(self.responses) - 1)]
         self.calls += 1
         return response
@@ -442,7 +451,8 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["clear"])
         self.assertEqual(result["remaining_inquiries"], ["Review the separate infraction appeal"])
 
-    async def test_intake_assessment_retries_transient_failure_with_longer_timeout(self):
+    @patch("core.ai_reviewer.asyncio.sleep", new_callable=AsyncMock)
+    async def test_intake_assessment_retries_transient_failure_with_longer_timeout(self, sleep):
         assessment = {
             "clear": True,
             "resolved": False,
@@ -468,10 +478,86 @@ class GeminiAutoReplyReviewerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(session.calls, 2)
-        self.assertEqual(session.request[1]["timeout"], 30)
+        self.assertEqual(session.request[1]["timeout"], 45)
         self.assertEqual(assessor.last_outcome, "assessed")
+        self.assertEqual(assessor.last_detail, "Gemini assessed the opening intake.")
+        self.assertEqual(sleep.await_count, 1)
 
-    async def test_intake_assessment_retries_invalid_json_and_tolerates_optional_omissions(self):
+    @patch("core.ai_reviewer.asyncio.sleep", new_callable=AsyncMock)
+    async def test_intake_keeps_service_errors_when_final_attempt_times_out(self, sleep):
+        responses = [FakeResponse(503, {}), FakeResponse(503, {}),
+                     FakeResponse(200, asyncio.TimeoutError())]
+        session = FakeSession(responses)
+        assessor = GeminiIntakeAssessment(session, "key")
+
+        async def check_released(delay):
+            self.assertTrue(responses[session.calls - 1].released)
+
+        sleep.side_effect = check_released
+        result = await assessor.assess("Please help.", autoreply_sent=False)
+
+        self.assertIsNone(result)
+        self.assertEqual(session.calls, 3)
+        self.assertEqual([request[1]["timeout"] for request in session.requests], [30, 45, 60])
+        self.assertEqual(assessor.last_outcome, "request_error")
+        self.assertEqual(assessor.last_detail.count("HTTP 503"), 2)
+        self.assertIn("not a quota error", assessor.last_detail)
+        self.assertIn("TimeoutError (request exceeded 60s; quota status unknown)", assessor.last_detail)
+        self.assertEqual(sleep.await_count, 2)
+        for call, lower, upper in zip(sleep.await_args_list, [2, 4], [3, 5]):
+            self.assertGreaterEqual(call.args[0], lower)
+            self.assertLessEqual(call.args[0], upper)
+
+    @patch("core.ai_reviewer.asyncio.sleep", new_callable=AsyncMock)
+    async def test_intake_honours_retry_after_and_reports_quota_throttling(self, sleep):
+        session = FakeSession(FakeResponse(429, {}, headers={"Retry-After": "12"}))
+        assessor = GeminiIntakeAssessment(session, "key")
+
+        self.assertIsNone(await assessor.assess("Please help.", autoreply_sent=False))
+
+        self.assertEqual(session.calls, 3)
+        self.assertEqual([call.args[0] for call in sleep.await_args_list], [12, 12])
+        self.assertEqual(assessor.last_outcome, "http_error")
+        self.assertIn("rate/quota throttling", assessor.last_detail)
+
+    @patch("core.ai_reviewer.asyncio.sleep", new_callable=AsyncMock)
+    async def test_intake_hands_off_for_long_retry_after_or_permanent_error(self, sleep):
+        for status, headers in [(503, {"Retry-After": "120"}), (400, {}), (403, {})]:
+            with self.subTest(status=status):
+                session = FakeSession(FakeResponse(status, {}, headers=headers))
+                assessor = GeminiIntakeAssessment(session, "key")
+                self.assertIsNone(await assessor.assess("Please help.", autoreply_sent=False))
+                self.assertEqual(session.calls, 1)
+                self.assertIn(f"HTTP {status}", assessor.last_detail)
+                sleep.assert_not_awaited()
+
+    @patch("core.ai_reviewer.asyncio.sleep", new_callable=AsyncMock)
+    async def test_intake_recovers_from_timeouts_and_malformed_retry_header(self, sleep):
+        session = FakeSession([
+            FakeResponse(200, asyncio.TimeoutError()),
+            FakeResponse(503, {}, headers={"Retry-After": "invalid"}),
+            FakeResponse(200, generate_content_output({"clear": True, "resolved": False})),
+        ])
+        assessor = GeminiIntakeAssessment(session, "key")
+
+        result = await assessor.assess("Please help.", autoreply_sent=False)
+
+        self.assertTrue(result["clear"])
+        self.assertFalse(result["resolved"])
+        self.assertEqual(assessor.last_outcome, "assessed")
+        self.assertEqual(session.calls, 3)
+
+    @patch("core.ai_reviewer.asyncio.sleep", new_callable=AsyncMock)
+    async def test_intake_cancellation_is_not_retried(self, sleep):
+        session = FakeSession(FakeResponse(200, asyncio.CancelledError()))
+        assessor = GeminiIntakeAssessment(session, "key")
+        with self.assertRaises(asyncio.CancelledError):
+            await assessor.assess("Please help.", autoreply_sent=False)
+        self.assertEqual(session.calls, 1)
+        sleep.assert_not_awaited()
+
+    @patch("core.ai_reviewer.asyncio.sleep", new_callable=AsyncMock)
+    async def test_intake_assessment_retries_invalid_json_and_tolerates_optional_omissions(self, sleep):
         session = FakeSession(
             [
                 FakeResponse(200, generate_content_output("{not valid json")),

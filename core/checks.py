@@ -50,7 +50,7 @@ def has_any_role_id(*role_ids: int):
         return any(getattr(role, "id", None) in allowed_role_ids for role in author_roles)
 
     formatted_roles = " or ".join(f"<@&{role_id}>" for role_id in allowed_role_ids)
-    predicate.fail_msg = f"Only members with {formatted_roles} may use this AI command."
+    predicate.fail_msg = f"Only members with {formatted_roles} may use this command."
     return commands.check(predicate)
 
 
