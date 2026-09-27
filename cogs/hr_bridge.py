@@ -1,16 +1,15 @@
 """Secure Discord -> E-Crew Human Resources case bridge."""
 
 import asyncio
-import copy
 import re
 import secrets
 import string
 from typing import Optional
 
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 
-from core.models import DummyMessage, getLogger
+from core.models import getLogger
 
 logger = getLogger(__name__)
 CASE_NAME_RE = re.compile(r"^([a-z0-9]{6})-unclaimed$")
@@ -19,21 +18,13 @@ CASE_ALPHABET = string.ascii_uppercase + string.digits
 
 
 class HumanResourcesBridge(commands.Cog):
-    """Mirror HR ticket channels to the restricted E-Crew case workspace."""
+    """Keep HR case records in sync without mirroring ticket messages."""
 
     def __init__(self, bot):
         self.bot = bot
         self._case_channels = set()
         self._sync_locks = {}
         self._last_error = None
-
-    async def cog_load(self):
-        self.hr_category_reconciliation.start()
-        self.hr_portal_replies.start()
-
-    def cog_unload(self):
-        self.hr_category_reconciliation.cancel()
-        self.hr_portal_replies.cancel()
 
     @property
     def enabled(self):
@@ -159,185 +150,7 @@ class HumanResourcesBridge(commands.Cog):
             })
             if result:
                 self._case_channels.add(channel.id)
-                if backfill:
-                    try:
-                        async for message in channel.history(limit=None, oldest_first=True):
-                            await self._sync_message(message)
-                    except discord.HTTPException:
-                        logger.warning("Could not backfill HR case %s.", case_number, exc_info=True)
             return result
-
-    @staticmethod
-    def _embed_dict(embed):
-        data = embed.to_dict()
-        # Keep the payload bounded and predictable for storage/UI rendering.
-        return {key: data[key] for key in ("title", "description", "url", "color", "author", "footer", "image", "thumbnail", "fields", "timestamp") if key in data}
-
-    @staticmethod
-    def _clean_discord_mentions(content, guild):
-        if not content or guild is None:
-            return content
-
-        def user_name(match):
-            member = guild.get_member(int(match.group(1)))
-            return f"@{getattr(member, 'display_name', 'unknown-user')}"
-
-        def role_name(match):
-            role = guild.get_role(int(match.group(1)))
-            return f"@{getattr(role, 'name', 'unknown-role')}"
-
-        def channel_name(match):
-            channel = guild.get_channel(int(match.group(1)))
-            return f"#{getattr(channel, 'name', 'unknown-channel')}"
-
-        content = re.sub(r"<@!?(\d+)>", user_name, content)
-        content = re.sub(r"<@&(\d+)>", role_name, content)
-        content = re.sub(r"<#(\d+)>", channel_name, content)
-        return re.sub(r"<a?:([A-Za-z0-9_]+):\d+>", r":\1:", content)
-
-    def _serialize_message(self, message):
-        embeds = [self._embed_dict(embed) for embed in message.embeds]
-        content = message.content or ""
-        attachments = [
-            {
-                "url": str(item.url), "proxy_url": str(item.proxy_url), "filename": item.filename,
-                "content_type": item.content_type, "size": item.size,
-            }
-            for item in message.attachments
-        ]
-
-        direction = "system"
-        author_name = getattr(message.author, "display_name", None) or str(message.author)
-        author_avatar = str(getattr(getattr(message.author, "display_avatar", None), "url", "")) or None
-        for embed in message.embeds:
-            footer = getattr(getattr(embed, "footer", None), "text", None) or ""
-            title = embed.title or ""
-            if footer.startswith("Message ID:") or title.startswith("Message from "):
-                direction = "recipient"
-            elif "Staff Reply" in title or footer or getattr(embed, "author", None):
-                direction = "staff"
-            if embed.description:
-                content = f"{content}\n{embed.description}".strip()
-            embed_author = getattr(getattr(embed, "author", None), "name", None)
-            embed_avatar = getattr(getattr(embed, "author", None), "icon_url", None)
-            if embed_author:
-                author_name = embed_author
-            if embed_avatar:
-                author_avatar = str(embed_avatar)
-            image_url = getattr(getattr(embed, "image", None), "url", None)
-            if image_url:
-                attachments.append({"url": str(image_url), "filename": title or "image", "content_type": "image/*"})
-            for field in getattr(embed, "fields", []):
-                if field.name.startswith(("File upload", "Image")):
-                    match = re.search(r"\[([^]]+)]\((https?://[^)]+)\)", field.value or "")
-                    if match:
-                        attachments.append({"url": match.group(2), "filename": match.group(1), "content_type": None})
-
-        if message.author.id != getattr(self.bot.user, "id", None):
-            # Raw command invocations are deleted by Modmail and are not transcript content.
-            if content.lstrip().startswith(str(self.bot.prefix)):
-                return None
-            direction = "staff"
-
-        reference_id = getattr(getattr(message, "reference", None), "message_id", None)
-        content = self._clean_discord_mentions(content, message.guild)
-        return {
-            "discord_message_id": str(message.id),
-            "direction": direction,
-            "author_id": str(message.author.id),
-            "author_name": author_name,
-            "author_avatar_url": author_avatar,
-            "content": content,
-            "attachments": attachments,
-            "embeds": embeds,
-            "reply_to_message_id": str(reference_id) if reference_id else None,
-            "sent_at": message.created_at.isoformat(),
-            "edited_at": message.edited_at.isoformat() if message.edited_at else None,
-        }
-
-    async def _sync_message(self, message):
-        if not self._is_hr_channel(message.channel):
-            return
-        if message.channel.id not in self._case_channels:
-            if not await self._ensure_case(message.channel):
-                return
-        payload = self._serialize_message(message)
-        if payload:
-            await self._post({
-                "event": "message_upsert",
-                "discord_channel_id": str(message.channel.id),
-                "message": payload,
-            })
-
-    @tasks.loop(seconds=15)
-    async def hr_category_reconciliation(self):
-        """Recover category moves missed while Discord reconnects or caches update."""
-        if not self.enabled:
-            return
-        category = self.bot.get_channel(self._category_id)
-        if not isinstance(category, discord.CategoryChannel):
-            return
-        for channel in category.text_channels:
-            if channel.id not in self._case_channels:
-                await self._ensure_case(channel, backfill=True)
-        await self._post({
-            "event": "reconcile_channels",
-            "discord_guild_id": str(category.guild.id),
-            "discord_channel_ids": [str(channel.id) for channel in category.text_channels],
-        })
-
-    @tasks.loop(seconds=5)
-    async def hr_portal_replies(self):
-        if not self.enabled:
-            return
-        replies = await self._post({"event": "pending_replies"})
-        for request in (replies or {}).get("replies", []):
-            await self._deliver_portal_reply(request)
-
-    @hr_portal_replies.before_loop
-    async def before_hr_portal_replies(self):
-        await self.bot.wait_until_ready()
-
-    async def _deliver_portal_reply(self, request):
-        request_id = str(request.get("id") or "")
-        try:
-            channel = self.bot.get_channel(int(request["discord_channel_id"]))
-            if not isinstance(channel, discord.TextChannel):
-                raise RuntimeError("The Discord ticket channel no longer exists.")
-            thread = await self._thread_for_channel(channel)
-            if thread is None:
-                raise RuntimeError("The Modmail thread could not be found.")
-            author_id = int(request["requester_discord_id"])
-            author = channel.guild.get_member(author_id)
-            if author is None:
-                author = await self.bot.get_or_fetch_member(channel.guild, author_id)
-            if author is None:
-                raise RuntimeError("The portal staff member could not be resolved in Discord.")
-            template = None
-            async for candidate in channel.history(limit=1):
-                template = candidate
-            if template is None:
-                raise RuntimeError("The ticket has no Discord message to use as a reply template.")
-            synthetic = DummyMessage(copy.copy(template))
-            synthetic.author = author
-            synthetic.content = str(request.get("content") or "").strip()
-            synthetic.embeds = []
-            synthetic.stickers = []
-            synthetic.reference = None
-            await thread.reply(synthetic, synthetic.content)
-            await self._post({"event": "reply_complete", "reply_id": request_id})
-            logger.info("Delivered HR portal reply %s to channel %s.", request_id, channel.id)
-        except Exception as exc:
-            logger.error("Could not deliver HR portal reply %s.", request_id, exc_info=True)
-            await self._post({
-                "event": "reply_failed",
-                "reply_id": request_id,
-                "error": f"{type(exc).__name__}: {exc}"[:1000],
-            })
-
-    @hr_category_reconciliation.before_loop
-    async def before_hr_category_reconciliation(self):
-        await self.bot.wait_until_ready()
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -387,24 +200,6 @@ class HumanResourcesBridge(commands.Cog):
     async def on_thread_ready(self, thread, creator, category, initial_message):
         if self._is_hr_channel(getattr(thread, "channel", None)):
             await self._ensure_case(thread.channel, backfill=True)
-
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        if self._is_hr_channel(getattr(message, "channel", None)):
-            await self._sync_message(message)
-
-    @commands.Cog.listener()
-    async def on_message_edit(self, before, after):
-        if self._is_hr_channel(getattr(after, "channel", None)):
-            await self._sync_message(after)
-
-    @commands.Cog.listener()
-    async def on_message_delete(self, message):
-        if self._is_hr_channel(getattr(message, "channel", None)):
-            # Ignore command clean-up; those messages were intentionally never mirrored.
-            if (message.content or "").lstrip().startswith(str(self.bot.prefix)):
-                return
-            await self._post({"event": "message_delete", "discord_message_id": str(message.id)})
 
     @commands.Cog.listener()
     async def on_thread_close(self, thread, closer, silent, delete_channel, message, scheduled):
